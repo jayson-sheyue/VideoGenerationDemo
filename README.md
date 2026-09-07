@@ -1,30 +1,72 @@
-# Omni 1.1 Flash Video Demo
+# Omni Flash Video Lab
 
-Web UI demo that accepts a shot-list prompt + third-party reference image URLs, downloads those images server-side, and calls **Gemini Omni 1.1 Flash** (`reference_to_video`) via the Agent Platform Interactions API.
+基于 **Gemini Omni 1.1 Flash**（`gemini-omni-1.1-flash-preview`）的本地 / Cloud Run 视频实验台：网页里写分镜、挂参考图，调用 Google Cloud **Agent Platform Interactions API** 完成生成、编辑、续写。
 
-## Why URL download?
+模型能力、参数限制、提示词写法见 [learning_guide.md](./learning_guide.md)。本文只讲 **这个仓库怎么跑、怎么部署、接口怎么用**。
 
-Omni's Interactions API expects reference images as **GCS `uri`** or **inline base64 `data`**, not arbitrary HTTPS links. This demo downloads your OSS/CDN URLs and sends base64.
+## 能做什么
 
-## Setup
+| 界面模式 | 实际 API `task` | 作用 |
+| --- | --- | --- |
+| **Generate** | `reference_to_video` 或 `text_to_video` | 分镜 + 可选参考图 → 新视频 |
+| **Continue edit** | `edit` | 以上一条成片为源，自然语言再改一刀 |
+| **Edit video** | `edit` | 指定任意 `gs://` 源视频做单次局部改动 |
+| **Extend** | `extend` | 在片尾续写 3–10 秒，返回**拼接后的完整成片** |
 
-1. Enable **Agent Platform API** on a GCP project.
-2. Authenticate:
+本 Demo **没有**接首尾帧插值（`image_to_video` 双图）和参考视频；那些能力在学习指南里有说明。
+
+## 工作原理（为何要下图、为何要 GCS）
+
+Omni 的 Interactions API **不接受任意 HTTPS 图片链接**，只接受：
+
+- 图片 / 视频的 **GCS `uri`**（`gs://…`）
+- 或请求体内的 **inline base64 `data`**
+
+因此本服务会：
+
+1. 浏览器读取参考图（也可粘贴 URL，由服务端下载）
+2. 上传到 `INPUT_GCS_URI`（推荐），再把 `gs://` 交给 Omni
+3. Omni 把成片写到 `OUTPUT_GCS_URI`
+4. 页面用 **GCS 签名 URL** 播放，不经过本机再下一遍整段 MP4
+
+没有配置 GCS 时会退回 base64 直传 / 本机落盘，大文件不稳定，生产环境请务必配 bucket。
+
+**Continue 不是多轮 chat。** 该模型在 Agent Platform 上会拒绝 `previous_interaction_id`，所以每一轮 Continue / Edit / Extend 都是一次新的 Interaction，把上一条成片的 `gs://` 再挂进去。
+
+## 本地运行
+
+### 1. GCP 准备
+
+1. 开通计费，并启用 **Agent Platform API**（`aiplatform.googleapis.com`）。
+2. 建一个 GCS bucket，建议两个前缀：`omni-input/`、`omni-output/`。
+3. 本机登录 Application Default Credentials：
 
 ```bash
 gcloud auth application-default login
 gcloud config set project YOUR_PROJECT_ID
 ```
 
-3. Configure env:
+运行身份需要能调 Agent Platform，以及对该 bucket 的读写（本机 ADC 通常是你的用户账号）。
+
+### 2. 配置环境变量
 
 ```bash
 cp .env.example .env
-# edit GOOGLE_CLOUD_PROJECT=...
-# optional: OUTPUT_GCS_URI=gs://your-bucket/omni-output/
 ```
 
-4. Install & run:
+至少改这三项：
+
+```bash
+GOOGLE_CLOUD_PROJECT=your-gcp-project-id
+INPUT_GCS_URI=gs://your-bucket/omni-input/
+OUTPUT_GCS_URI=gs://your-bucket/omni-output/
+```
+
+若本机访问 `oauth2.googleapis.com` / `aiplatform.googleapis.com` 需要代理（例如 Clash Mixed Port），保留 `.env.example` 里的 `HTTP_PROXY` / `HTTPS_PROXY` / `GOOGLE_API_TRUST_ENV=true`。Cloud Run 上这些会被忽略。
+
+其余变量说明见下文「环境变量」。
+
+### 3. 安装并启动
 
 ```bash
 python3 -m venv .venv
@@ -33,70 +75,114 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Open [http://127.0.0.1:8000](http://127.0.0.1:8000).
+打开 [http://127.0.0.1:8000](http://127.0.0.1:8000)。右上角健康检查应显示已配置项目与 GCS。
 
-## UI flow
+生成通常要 **1–3 分钟或更久**；任务在服务端异步跑，页面轮询 `/api/jobs/{id}`。
 
-1. Click **Load example** (or paste your own prompt + image URLs).
-2. Confirm duration `8`, resolution `720p`, aspect `16:9`, audio on / no subtitles / no BGM.
-3. Click **Generate video** — status polls until the MP4 appears in the Result panel.
+## 界面怎么用
 
-## API
+1. 点 **Load example**，或自己贴分镜。提示词里如果带 `参考图：["https://…"]` 数组，会自动填入参考图列表。
+2. 用 `@图片1` / `@图片2` 把角色、场景绑到对应参考图（服务端会改写成 Omni 的 `<IMAGE_REF_0>`）。
+3. 确认时长（默认 8s）、分辨率（默认 720p）、画幅（默认 16:9），以及音频相关开关。
+4. 点 **Generate video**。成片出现在右侧 Result。
+5. 用「以此结果继续编辑 / 编辑 / 续写」，或点建议气泡，在同一条素材上迭代。
+6. **重新生成**会复用该任务已经上传到 GCS 的参考图，不必再下一次图。
 
-- `GET /api/example` — sample prompt + 6 reference URLs
-- `POST /api/generate` — start a job
-- `GET /api/jobs/{id}` — poll status
-- `GET /api/jobs/{id}/video` — download / stream MP4
+### 四种模式的差异
 
-## Deploy to Cloud Run
+- **Generate**：可调时长、分辨率、画幅；参考图与音频开关仅此模式生效。有参考图时 **不会改写分镜原文**，只在后面追加「动作与运镜」说明，避免 LLM 把人物画风写崩。
+- **Continue / Edit**：都是 `task=edit`。时长和画幅沿用源视频，只能改分辨率。源片 **不得超过 10 秒**（续写后的 16s 成片不能再 Edit）。指令宜短，服务端会补上 `Keep everything else the same.`
+- **Extend**：只能设本次续写时长（3–10s）。源片 1–30s，Omni Flash 成片最长约 40s。返回的是 **原片 + 新片段** 的完整视频，不是只返回新增那几秒。
 
-Running on Cloud Run removes the local proxy/VPN from the path entirely: tokens
-come from the instance metadata server and GCS traffic stays inside Google's
-network, so no `HTTP_PROXY` is involved.
+Comparison 面板可以把同一条血缘链上的成片并排同步播放。任务状态存在进程内存里，重启服务或 Cloud Run 缩到 0 后历史会丢，**成片仍在 GCS**。
+
+## 环境变量
+
+| 变量 | 含义 |
+| --- | --- |
+| `GOOGLE_CLOUD_PROJECT` | GCP 项目 |
+| `INPUT_GCS_URI` | 参考图上传前缀 |
+| `OUTPUT_GCS_URI` | 成片输出前缀；同时打开 `delivery=uri` |
+| `OMNI_MODEL` | 默认 `gemini-omni-1.1-flash-preview` |
+| `VIDEO_PLAYBACK` | `gcs_signed`（默认）或 `local` |
+| `GCS_SIGNING_SERVICE_ACCOUNT` | Cloud Run 上签 URL 用的运行时服务账号 |
+| `PROMPT_ENHANCE` | 是否写动作补丁 / 续写润色 / 建议气泡 |
+| `PROMPT_ENHANCE_MODEL` | 默认 `gemini-2.5-flash` |
+| `PROMPT_ENHANCE_LOCATION` | 默认 `global` |
+| `HTTP_PROXY` / `HTTPS_PROXY` | 仅本地；Cloud Run 会剥离 |
+| `GOOGLE_API_TRUST_ENV` | 本地走系统代理时设 `true` |
+| `OUTPUT_DIR` | 本地落盘目录；Cloud Run 默认 `/tmp` |
+
+Omni 的 Interactions URL 固定为 `locations/global`，与部署区域无关。
+
+## HTTP API
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `GET` | `/api/health` | 项目、模型、GCS、代理、runtime |
+| `GET` | `/api/example` | 示例分镜 + 参考图 URL |
+| `POST` | `/api/generate` | 启动任务（`mode`: generate / continue / edit / extend） |
+| `GET` | `/api/jobs` | 最近任务 |
+| `GET` | `/api/jobs/{id}` | 轮询状态；含 `editable`、`reuse_ready`、`duration_sec` |
+| `GET` | `/api/jobs/{id}/video` | 本机文件或 302 到签名 URL |
+| `GET` | `/api/jobs/{id}/lineage` | 同一条生成链上的成片 |
+| `GET` | `/api/jobs/{id}/suggestions` | 2–3 条可点的下一步（按分镜生成，缓存一次） |
+| `GET` | `/api/video?uri=gs://…` | 给粘贴的源视频签播放 URL（仅本 Demo 的 bucket） |
+| `POST` | `/api/test-gcs-upload` | 只测浏览器 → GCS，不调 Omni |
+| `GET` | `/api/fetch-image?url=` | 服务端代下参考图 |
+
+`POST /api/generate` 常用字段：`prompt`、`reference_images`（base64）、`image_urls`、`duration`（3–10）、`resolution`、`aspect_ratio`、`mode`、`source_job_id` / `source_video_uri`、`reuse_job_id`、`enhance_prompt`。
+
+超过 10 秒的成片，建议接口只给 **extend**，不再给 edit。
+
+## 部署到 Cloud Run
+
+Cloud Run 上 token 来自实例 metadata，GCS 走 Google 内网，**不需要本机代理**。
 
 ```bash
 PROJECT_ID=your-gcp-project BUCKET=your-gcs-bucket ./deploy/cloud-run.sh
 ```
 
-Optional: `REGION=asia-east1`, `OMNI_MODEL=...`, `PROMPT_ENHANCE_MODEL=...`.
+可选：`REGION=asia-east1`、`SERVICE=…`、`OMNI_MODEL=…`、`PROMPT_ENHANCE_MODEL=…`、`ALLOW_UNAUTHENTICATED=false`。
 
-The script enables Agent Platform / Cloud Run / Cloud Build APIs, creates a
-runtime service account, and deploys from source. Docker is not required
-locally — Cloud Build builds the image from the `Dockerfile`.
+脚本会开通 API、创建运行时服务账号（Vertex 用户 + bucket 对象管理员 + 自我 impersonate 以便签 URL），并从源码部署。本机 **不需要 Docker**，镜像由 Cloud Build 按 `Dockerfile` 构建。
 
-Deployment-specific behaviour, keyed off Cloud Run's `K_SERVICE`:
+检测到 `K_SERVICE` 后：
 
-- Proxy env vars are stripped, `.env` proxy values are ignored, and
-  `GOOGLE_API_TRUST_ENV=false` is set.
-- Scratch files go to `/tmp` (the container filesystem is in-memory).
-- `GET /api/health` reports `"runtime": "cloud_run"`.
+- 剥离所有代理环境变量，并设 `GOOGLE_API_TRUST_ENV=false`
+- 临时文件写 `/tmp`
+- `/api/health` 的 `runtime` 为 `cloud_run`
 
-The deploy flags are load-bearing: `JobStore` keeps job state in process memory
-and generation continues after the HTTP response returns, so the service runs
-with `--no-cpu-throttling` and `--max-instances 1`. Serving multiple instances
-requires moving job state into external storage first.
+这些部署参数是有意的，不是默认值随便填：
 
-It scales to zero when idle (`--min-instances 0`), so there is no standby cost,
-at the price of a cold start on the first request and the loss of the in-memory
-job history once an idle instance is reclaimed. Generated videos always remain
-in `OUTPUT_GCS_URI`; keep the tab open during a run so polling holds the
-instance up.
+- `JobStore` 在 **进程内存** 里，生成在 HTTP 返回之后仍会跑很久 → `--no-cpu-throttling`、`--max-instances 1`
+- 空闲缩到 0（`--min-instances 0`）不产生待机费用；冷启动后内存历史清空，成片仍在 `OUTPUT_GCS_URI`
+- 生成期间请保持页面打开，轮询能把实例撑住
+- 默认 `--allow-unauthenticated`。大陆网络经常打不开 `*.run.app`，需要的话自己挂自定义域名 + 负载均衡
 
-`--allow-unauthenticated` is the default so clients can open the URL directly.
-Note that `*.run.app` is often unreachable from mainland China; a custom domain
-behind an external load balancer may be needed.
+多实例之前必须先把任务状态迁到 Redis / Firestore 之类的外部存储。
 
-When a clip finishes, `GET /api/jobs/{id}/suggestions` asks the same text model
-for two or three follow-ups grounded in the shot list that produced it, returned
-as JSON via a response schema. They render as clickable bubbles that fill in the
-mode, the instruction and the source clip in one click.
+## 仓库结构
 
-Suggestions are cached on the job, so the model is called once per clip. Past
-the 10s edit ceiling only `extend` ideas are offered. A failure returns an empty
-list and the bubbles stay hidden.
+```
+app/config.py            环境变量、Cloud Run 检测、代理
+app/omni_client.py       Interactions 请求、轮询、解析视频
+app/jobs.py              异步任务、10s 编辑上限、参考图复用
+app/prompt_utils.py      解析 URL、@图片N → <IMAGE_REF_N>、台词锁
+app/prompt_enhancer.py   动作补丁、续写润色、建议气泡
+app/gcs_util.py          上传、签名 URL、时长探测
+app/main.py              FastAPI
+static/                  前端
+deploy/cloud-run.sh      一键部署
+.env.example             配置模板（不要提交真实 .env）
+```
 
-## Notes
+## 已知限制（与本 Demo 相关）
 
-- Generation often takes **1–3+ minutes**; jobs run async in the server.
-- Dialogue audio is steered by the prompt (Omni has no separate `generate_audio` flag like Veo).
-- For reliable large outputs, set `OUTPUT_GCS_URI`.
+- 生成慢，请当异步任务用，不要把 HTTP 超时设太短。
+- 对白靠提示词约束；Omni **没有** Veo 那种独立的 `generate_audio` 字段。打开「Generate dialogue」类措辞容易多出旁白，本 Demo 会按分镜里的引号锁台词。
+- 当前 API **不支持改配音 / 改对白内容**（画面编辑可以）。
+- 文档里 extend 的 `response_format` 写了 `aspect_ratio`，**线上会拒**；本仓库只传 `duration`。
+- 编辑过长视频会返回 `Editing duration N exceeds maximum duration 10`。
+
+更完整的模型能力表、提示词模式、以及本 Demo 未覆盖的 API，见 [learning_guide.md](./learning_guide.md)。
