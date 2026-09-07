@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Omni Flash Video Lab</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Manrope:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/style.css?v=18" />
+  </head>
+  <body>
+    <div class="noise" aria-hidden="true"></div>
+    <header class="top">
+      <div class="brand">
+        <span class="brand-mark">OF</span>
+        <div>
+          <p class="brand-name">Omni Flash Video Lab</p>
+          <p class="brand-sub">gemini-omni-1.1-flash · generate · edit · extend</p>
+        </div>
+      </div>
+      <div class="health" id="health">Checking GCP…</div>
+    </header>
+
+    <main class="layout">
+      <section class="panel compose">
+        <div class="panel-head">
+          <h1>Compose</h1>
+          <button type="button" class="ghost" id="loadExample">Load example</button>
+        </div>
+
+        <div class="mode-tabs" id="modeTabs" role="tablist" aria-label="Omni workflow">
+          <button type="button" class="mode-tab active" data-mode="generate">Generate</button>
+          <button type="button" class="mode-tab" data-mode="continue">Continue edit</button>
+          <button type="button" class="mode-tab" data-mode="edit">Edit video</button>
+          <button type="button" class="mode-tab" data-mode="extend">Extend</button>
+        </div>
+
+        <aside class="guide" id="modeGuide">
+          <p class="guide-title" id="guideTitle">步骤 1 · Generate — 由提示词与参考图生成视频</p>
+          <ol class="guide-steps" id="guideSteps"></ol>
+          <p class="guide-note" id="guideNote"></p>
+        </aside>
+
+        <div class="source-box" id="sourceBox" hidden>
+          <label class="field">
+            <span>Source job / interaction</span>
+            <input
+              id="sourceJobId"
+              type="text"
+              placeholder="从右侧任务列表中选择，或直接填写 job id"
+            />
+          </label>
+          <label class="field" id="sourceVideoField" hidden>
+            <span>source video (gs://)</span>
+            <input id="sourceVideoUri" type="text" placeholder="gs://…/omni-output/….mp4" />
+          </label>
+        </div>
+
+        <label class="field">
+          <span id="promptLabel">Prompt</span>
+          <textarea
+            id="prompt"
+            rows="10"
+            placeholder="粘贴分镜提示词与参考图 URL 数组，系统会自动解析并填充下方参考图列表。"
+          ></textarea>
+        </label>
+
+        <div class="grid-3" id="mediaControls">
+          <label class="field" id="durationField">
+            <span>Duration</span>
+            <select id="duration">
+              <option value="4">4s</option>
+              <option value="6">6s</option>
+              <option value="8" selected>8s</option>
+              <option value="10">10s</option>
+            </select>
+          </label>
+          <label class="field" id="resolutionField">
+            <span>Resolution</span>
+            <select id="resolution">
+              <option value="360p">360p</option>
+              <option value="720p" selected>720p</option>
+              <option value="1080p">1080p</option>
+              <option value="4k">4k</option>
+            </select>
+          </label>
+          <label class="field" id="aspectField">
+            <span>Aspect</span>
+            <select id="aspectRatio">
+              <option value="16:9" selected>16:9 anamorphic</option>
+              <option value="9:16">9:16</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="toggles" id="enhanceToggle">
+          <label class="check"
+            ><input type="checkbox" id="enhancePrompt" checked /> 自动润色提示词</label
+          >
+          <span class="hint tight"
+            >分镜原文不改。仅追加动作/运镜说明，人物与风格仍以参考图为准。已生成的任务可点「重新生成」复用 GCS 参考图。</span
+          >
+        </div>
+
+        <div class="toggles" id="audioToggles">
+          <label class="check"
+            ><input type="checkbox" id="generateAudio" checked /> generate_audio</label
+          >
+          <label class="check"
+            ><input type="checkbox" id="noSubtitles" checked /> no subtitles</label
+          >
+          <label class="check"
+            ><input type="checkbox" id="noBgm" checked /> no background music</label
+          >
+        </div>
+
+        <div id="refsSection">
+          <div class="refs-head">
+            <h2>Reference images</h2>
+            <button type="button" class="ghost" id="addImage">+ Add URL</button>
+          </div>
+          <p class="hint">
+            参考图由浏览器读取后上传至 GCS 并提交模型；成片写入
+            <code>OUTPUT_GCS_URI</code>，页面通过签名 URL 播放。
+          </p>
+          <div id="imageList" class="image-list"></div>
+        </div>
+
+        <div class="actions">
+          <button type="button" class="primary" id="generateBtn">Generate video</button>
+          <button type="button" class="ghost" id="testGcsBtn">Test GCS upload</button>
+          <p class="status-line" id="statusLine">Ready</p>
+        </div>
+      </section>
+
+      <section class="panel result">
+        <div class="panel-head">
+          <h1>Result</h1>
+          <span class="job-id" id="jobId"></span>
+        </div>
+
+        <div class="stage" id="stage">
+          <div class="stage-empty" id="stageEmpty">
+            <p class="stage-title">No clip yet</p>
+            <p class="stage-copy">
+              请先在左侧完成一次 Generate，随后可切换至 Continue / Edit / Extend，
+              以自然语言对同一素材进行迭代修改。
+            </p>
+          </div>
+          <video id="player" controls playsinline hidden></video>
+        </div>
+
+        <div class="suggestions" id="suggestions" hidden>
+          <p class="suggestions-title" id="suggestionsTitle">下一步试试</p>
+          <div class="bubbles" id="suggestionBubbles"></div>
+        </div>
+
+        <div class="result-actions" id="resultActions" hidden>
+          <button type="button" class="ghost" id="regenBtn">重新生成</button>
+          <button type="button" class="ghost" id="useForContinue">以此结果继续编辑</button>
+          <button type="button" class="ghost" id="useForEdit">以此结果编辑</button>
+          <button type="button" class="ghost" id="useForExtend">以此结果续写</button>
+        </div>
+
+        <div class="comparison" id="comparison" hidden>
+          <div class="comparison-head">
+            <h2>Comparison</h2>
+            <div class="comparison-tools">
+              <button type="button" class="ghost" id="playAllBtn">同步播放</button>
+              <button type="button" class="ghost" id="resetAllBtn">回到开头</button>
+            </div>
+          </div>
+          <p class="hint tight" id="comparisonHint"></p>
+          <div class="comparison-grid" id="comparisonGrid"></div>
+        </div>
+
+        <div class="meta-block">
+          <h2>Job log</h2>
+          <pre id="jobLog">—</pre>
+        </div>
+
+        <div class="meta-block" id="promptBlock" hidden>
+          <h2>Prompt sent to Omni</h2>
+          <p class="hint tight" id="promptDiffNote"></p>
+          <pre id="promptSent">—</pre>
+        </div>
+
+        <div class="meta-block" id="thoughtsBlock" hidden>
+          <h2>Model thoughts</h2>
+          <pre id="thoughts">—</pre>
+        </div>
+
+        <div class="history">
+          <h2>Recent jobs</h2>
+          <p class="hint tight">
+            选择一条已完成的任务，可自动填入 Continue / Edit / Extend 所需的源信息。
+          </p>
+          <ul id="jobList"></ul>
+        </div>
+      </section>
+    </main>
+
+    <script src="/static/app.js?v=19"></script>
+  </body>
+</html>

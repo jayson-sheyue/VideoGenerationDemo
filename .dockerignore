@@ -1,0 +1,14 @@
+# Local proxy + credentials config must never reach the image
+.env
+
+.venv/
+outputs/
+deploy/
+.git/
+.gitignore
+.DS_Store
+README.md
+
+__pycache__/
+**/__pycache__/
+*.py[cod]

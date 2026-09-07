@@ -1,0 +1,14 @@
+outputs/
+.env
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+*.mp4
+.pytest_cache/
+credentials.json
+*.pem
+*.key
+service-account*.json
+.gcloud/
+
