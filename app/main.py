@@ -31,6 +31,7 @@ from app.prompt_utils import (
     EXAMPLE_IMAGES,
     EXAMPLE_PROMPT,
     download_image_as_base64,
+    examples_payload,
     extract_reference_urls,
 )
 
@@ -62,6 +63,8 @@ class GenerateRequest(BaseModel):
     no_bgm: bool = True
     # generate | continue | edit | extend
     mode: str = Field(default="generate")
+    # Omni generate task: text_to_video | image_to_video | frames_to_video | reference_to_video
+    generate_task: str | None = None
     enhance_prompt: bool = True
     # For continue/edit/extend: gs://…mp4 from a prior job (or any GCS video)
     source_video_uri: str | None = None
@@ -104,7 +107,13 @@ async def example() -> dict:
         "generate_audio": True,
         "no_subtitles": True,
         "no_bgm": True,
+        "generate_task": "reference_to_video",
     }
+
+
+@app.get("/api/examples")
+async def examples() -> dict:
+    return examples_payload()
 
 
 @app.get("/api/fetch-image")
@@ -169,8 +178,21 @@ async def generate(body: GenerateRequest) -> dict:
     if mode not in {"generate", "continue", "edit", "extend"}:
         raise HTTPException(400, "mode must be generate|continue|edit|extend")
 
+    generate_task = (body.generate_task or "").strip().lower() or None
+    if generate_task and generate_task not in {
+        "text_to_video",
+        "image_to_video",
+        "frames_to_video",
+        "reference_to_video",
+    }:
+        raise HTTPException(
+            400,
+            "generate_task must be text_to_video|image_to_video|"
+            "frames_to_video|reference_to_video",
+        )
+
     urls = [str(u) for u in body.image_urls]
-    if mode == "generate" and not urls:
+    if mode == "generate" and generate_task != "text_to_video" and not urls:
         _, urls = extract_reference_urls(body.prompt)
 
     client_images = [
@@ -185,9 +207,17 @@ async def generate(body: GenerateRequest) -> dict:
         src = await job_store.get(reuse_id)
         if not src:
             raise HTTPException(404, f"reuse_job_id not found: {reuse_id}")
-        reuse_images = reuse_images_from_job(src)
-        if not reuse_images:
-            raise HTTPException(400, "that job has no GCS reference images to reuse")
+        generate_task = (
+            generate_task
+            or src.meta.get("generate_task")
+            or src.meta.get("task")
+        )
+        if generate_task == "text_to_video":
+            reuse_images = []
+        else:
+            reuse_images = reuse_images_from_job(src)
+            if not reuse_images:
+                raise HTTPException(400, "that job has no GCS images to reuse")
         if not prompt_text:
             prompt_text = (src.meta.get("shot_list") or "").strip()
         if not prompt_text:
@@ -198,6 +228,23 @@ async def generate(body: GenerateRequest) -> dict:
 
     if mode == "generate" and not prompt_text:
         raise HTTPException(400, "prompt is required")
+
+    if mode == "generate" and generate_task == "text_to_video":
+        client_images = []
+        urls = []
+
+    if (
+        mode == "generate"
+        and generate_task in {"image_to_video", "frames_to_video", "reference_to_video"}
+        and not reuse_id
+        and not client_images
+        and not urls
+    ):
+        need = "exactly two images" if generate_task == "frames_to_video" else "at least one image"
+        raise HTTPException(
+            400,
+            f"{generate_task} needs {need} (upload, paste a URL, or Load example)",
+        )
 
     source_video = (body.source_video_uri or "").strip() or None
 
@@ -234,6 +281,7 @@ async def generate(body: GenerateRequest) -> dict:
             source_job_id=generate_source_job_id if mode == "generate" else body.source_job_id,
             enhance_prompt=body.enhance_prompt,
             reuse_images=reuse_images if mode == "generate" else None,
+            generate_task=generate_task if mode == "generate" else None,
         )
     )
     return job.to_dict()
@@ -349,7 +397,8 @@ async def get_job_lineage(job_id: str) -> dict:
             {
                 "job_id": j.id,
                 "mode": j.mode,
-                "task": j.meta.get("task"),
+                "task": j.meta.get("api_task") or j.meta.get("task"),
+                "generate_task": j.meta.get("generate_task"),
                 "duration_sec": j.duration_sec,
                 "video_url": f"/api/jobs/{j.id}/video",
                 "video_uri": j.video_uri,

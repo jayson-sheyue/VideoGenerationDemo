@@ -269,6 +269,23 @@ def rewrite_image_refs(prompt: str, image_count: int) -> str:
     return rewritten
 
 
+def frame_lock_prefix(image_count: int) -> str:
+    """image_to_video: the attached stills are literal first / last frames."""
+    if image_count <= 0:
+        return ""
+    if image_count == 1:
+        return (
+            "Use the given image as the literal first frame of the video. "
+            "Animate from that exact frame. Do not replace the subject, "
+            "restyle the image, or treat it as a loose character reference."
+        )
+    return (
+        "Use the first image as the literal first frame and the second image "
+        "as the literal last frame. Interpolate a continuous camera move "
+        "between them. Do not replace subjects or restyle either frame."
+    )
+
+
 def reference_lock_prefix(image_count: int) -> str:
     """Official Omni reference tags + hard lock on look, plot, and speech."""
     if image_count <= 0:
@@ -352,3 +369,127 @@ No background music
 """
     + json.dumps(EXAMPLE_IMAGES, indent=2, ensure_ascii=False)
 )
+
+# Clickable walkthrough prompts. Image URLs are public gstatic stills so
+# "Load example" works without a local file. Users can replace them with uploads.
+GENERATE_EXAMPLES: dict[str, list[dict]] = {
+    "text_to_video": [
+        {
+            "label": "庭院灯笼",
+            "prompt": (
+                "16:9 cinematic, dusk, illustrated look\n"
+                "A red paper lantern lifts off a wooden table in a quiet courtyard. "
+                "Wide shot, 24mm, slow tilt up as it rises and spins. "
+                "Warm lantern light, cool blue sky. No people.\n"
+                "No dialogue. No burned-in subtitles. No background music."
+            ),
+        },
+        {
+            "label": "竖屏夜市",
+            "prompt": (
+                "9:16 handheld documentary\n"
+                "A street-food stall at night. Steam rises from a wok. "
+                "The cook flips noodles in one continuous motion. Neon signs bokeh in the background.\n"
+                "No spoken lines. Diegetic sizzle only. No burned-in subtitles."
+            ),
+            "aspect_ratio": "9:16",
+        },
+        {
+            "label": "微距水滴",
+            "prompt": (
+                "16:9 macro, 8 seconds\n"
+                "A single water droplet hangs from a leaf tip, then falls in slow motion "
+                "and ripples a dark pond. Shallow depth of field, f/1.8, 100mm.\n"
+                "Silence except a soft splash. No text on screen."
+            ),
+        },
+    ],
+    "image_to_video": [
+        {
+            "label": "从静帧推进",
+            "prompt": (
+                "Use this image as the first frame.\n"
+                "The camera slowly pushes in. A light breeze moves foliage. "
+                "Keep the original lighting and composition; only add natural motion.\n"
+                "No dialogue. No burned-in subtitles. No background music."
+            ),
+            "image_urls": [EXAMPLE_IMAGES[0]],
+        },
+        {
+            "label": "天气变化",
+            "prompt": (
+                "Start from this exact frame.\n"
+                "Over 8 seconds the light cools and a light rain begins. "
+                "Gentle handheld drift. Do not change the subject or crop.\n"
+                "Diegetic rain only. No speech."
+            ),
+            "image_urls": [EXAMPLE_IMAGES[1]],
+        },
+    ],
+    "frames_to_video": [
+        {
+            "label": "两帧运镜",
+            "prompt": (
+                "Start on the first image and end on the second image.\n"
+                "A smooth 8-second camera move interpolates between them: "
+                "slow dolly plus a slight pan. Keep lighting consistent.\n"
+                "No dialogue. No burned-in subtitles."
+            ),
+            "image_urls": [EXAMPLE_IMAGES[0], EXAMPLE_IMAGES[2]],
+        },
+        {
+            "label": "首尾循环",
+            "prompt": (
+                "First image is frame 0, second image is the last frame.\n"
+                "Orbit slowly around the subject so the end pose matches the last still. "
+                "Motion should feel like one shot, not a cut.\n"
+                "No speech. No on-screen text."
+            ),
+            "image_urls": [EXAMPLE_IMAGES[1], EXAMPLE_IMAGES[0]],
+        },
+    ],
+    "reference_to_video": [
+        {
+            "label": "角色锁定分镜",
+            "prompt": EXAMPLE_PROMPT,
+            "image_urls": EXAMPLE_IMAGES,
+        },
+        {
+            "label": "双人仰望",
+            "prompt": (
+                "16:9, illustrated look\n"
+                "Character: traveler @图片1\n"
+                "Companion: small fox @图片2\n"
+                "Shot 1, 0-8s, medium, 50mm. @图片1 kneels and @图片2 steps closer. "
+                "They both look up as a lantern rises out of frame.\n"
+                "The traveler says: What is it looking for?\n"
+                "No burned-in subtitles. No background music.\n\n"
+                "参考图：\n"
+                + json.dumps(EXAMPLE_IMAGES[:2], indent=2, ensure_ascii=False)
+            ),
+            "image_urls": EXAMPLE_IMAGES[:2],
+        },
+    ],
+}
+
+EDIT_EXAMPLES = [
+    "Make the lighting warmer, like golden hour.",
+    "Remove the coffee cup from the table.",
+    "Change her jacket to bright red.",
+    "Make it rain lightly outside the window.",
+]
+
+EXTEND_EXAMPLES = [
+    "Continue as the camera slowly pulls back to reveal the whole space.",
+    "Continue as she turns toward the window and smiles.",
+    "Continue as the lantern drifts higher and the light fades.",
+]
+
+
+def examples_payload() -> dict:
+    return {
+        "generate": GENERATE_EXAMPLES,
+        "continue": EDIT_EXAMPLES,
+        "edit": EDIT_EXAMPLES,
+        "extend": EXTEND_EXAMPLES,
+    }

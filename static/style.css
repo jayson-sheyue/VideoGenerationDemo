@@ -307,7 +307,7 @@ input[type="url"] {
 
 textarea {
   resize: vertical;
-  min-height: 220px;
+  min-height: 160px;
   line-height: 1.45;
 }
 
@@ -415,6 +415,102 @@ input[type="url"]:focus {
   background: var(--ink);
   color: #f7f3ea;
   border-color: var(--ink);
+}
+
+.gen-tabs {
+  margin-top: -0.35rem;
+}
+
+.guide-task {
+  margin: 0 0 0.45rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.guide-task code {
+  font-size: 0.75rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 6px;
+  background: rgba(15, 107, 92, 0.1);
+}
+
+.example-row {
+  margin: 0 0 0.95rem;
+}
+
+.example-label {
+  margin: 0 0 0.4rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.example-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.example-chip {
+  border: 1px dashed var(--line);
+  background: rgba(255, 255, 255, 0.55);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 0.35rem 0.7rem;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.example-chip:hover,
+.example-chip.active {
+  border-style: solid;
+  border-color: var(--accent);
+  background: rgba(15, 107, 92, 0.1);
+  color: var(--accent);
+}
+
+.refs-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.image-row {
+  display: grid;
+  grid-template-columns: 72px 1fr auto;
+  gap: 0.65rem;
+  align-items: center;
+  padding: 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.image-row .mid {
+  min-width: 0;
+}
+
+.image-row .file-name {
+  margin: 0.25rem 0 0;
+  font-size: 0.72rem;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+input[type="url"] {
+  width: 100%;
 }
 
 .guide {

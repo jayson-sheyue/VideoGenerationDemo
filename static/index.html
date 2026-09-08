@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Manrope:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/static/style.css?v=18" />
+    <link rel="stylesheet" href="/static/style.css?v=20" />
   </head>
   <body>
     <div class="noise" aria-hidden="true"></div>
@@ -19,7 +19,7 @@
         <span class="brand-mark">OF</span>
         <div>
           <p class="brand-name">Omni Flash Video Lab</p>
-          <p class="brand-sub">gemini-omni-1.1-flash · generate · edit · extend</p>
+          <p class="brand-sub">text · first frame · first+last · references · edit · extend</p>
         </div>
       </div>
       <div class="health" id="health">Checking GCP…</div>
@@ -39,11 +39,24 @@
           <button type="button" class="mode-tab" data-mode="extend">Extend</button>
         </div>
 
+        <div class="mode-tabs gen-tabs" id="genTabs" role="tablist" aria-label="Generate task">
+          <button type="button" class="mode-tab active" data-gen="text_to_video">Text → video</button>
+          <button type="button" class="mode-tab" data-gen="image_to_video">First frame</button>
+          <button type="button" class="mode-tab" data-gen="frames_to_video">First + last</button>
+          <button type="button" class="mode-tab" data-gen="reference_to_video">References</button>
+        </div>
+
         <aside class="guide" id="modeGuide">
-          <p class="guide-title" id="guideTitle">步骤 1 · Generate — 由提示词与参考图生成视频</p>
+          <p class="guide-title" id="guideTitle">Text → video — 纯文本生成</p>
+          <p class="guide-task" id="guideTask"><code>task=text_to_video</code></p>
           <ol class="guide-steps" id="guideSteps"></ol>
           <p class="guide-note" id="guideNote"></p>
         </aside>
+
+        <div class="example-row" id="exampleRow">
+          <p class="example-label">试用示例</p>
+          <div class="example-chips" id="exampleChips"></div>
+        </div>
 
         <div class="source-box" id="sourceBox" hidden>
           <label class="field">
@@ -101,8 +114,8 @@
           <label class="check"
             ><input type="checkbox" id="enhancePrompt" checked /> 自动润色提示词</label
           >
-          <span class="hint tight"
-            >分镜原文不改。仅追加动作/运镜说明，人物与风格仍以参考图为准。已生成的任务可点「重新生成」复用 GCS 参考图。</span
+          <span class="hint tight" id="enhanceHint"
+            >无参考图时会补运镜与转场；有参考图时不改分镜原文，只追加动作说明。</span
           >
         </div>
 
@@ -120,13 +133,22 @@
 
         <div id="refsSection">
           <div class="refs-head">
-            <h2>Reference images</h2>
-            <button type="button" class="ghost" id="addImage">+ Add URL</button>
+            <h2 id="refsTitle">Reference images</h2>
+            <div class="refs-actions">
+              <button type="button" class="ghost" id="addImage">+ Add URL</button>
+              <button type="button" class="ghost" id="uploadImages">Upload files</button>
+            </div>
           </div>
-          <p class="hint">
-            参考图由浏览器读取后上传至 GCS 并提交模型；成片写入
-            <code>OUTPUT_GCS_URI</code>，页面通过签名 URL 播放。
+          <p class="hint" id="refsHint">
+            可粘贴公网 URL，或直接从本地上传。图片由浏览器读入后上传至 GCS 再提交 Omni。
           </p>
+          <input
+            id="filePicker"
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/gif,image/heic,image/heif"
+            multiple
+            hidden
+          />
           <div id="imageList" class="image-list"></div>
         </div>
 
@@ -147,8 +169,7 @@
           <div class="stage-empty" id="stageEmpty">
             <p class="stage-title">No clip yet</p>
             <p class="stage-copy">
-              请先在左侧完成一次 Generate，随后可切换至 Continue / Edit / Extend，
-              以自然语言对同一素材进行迭代修改。
+              请先选一种生成能力（文生 / 首帧 / 首尾帧 / 参考图），出片后再用 Continue / Edit / Extend 迭代。
             </p>
           </div>
           <video id="player" controls playsinline hidden></video>
@@ -204,6 +225,6 @@
       </section>
     </main>
 
-    <script src="/static/app.js?v=19"></script>
+    <script src="/static/app.js?v=20"></script>
   </body>
 </html>

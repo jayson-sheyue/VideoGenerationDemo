@@ -118,10 +118,11 @@ def build_payload(
     task: str | None = None,
     video: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Build an Interactions payload for text_to_video / reference_to_video /
-    edit / extend.
+    """Build an Interactions payload for text_to_video / image_to_video /
+    reference_to_video / edit / extend.
 
-    images: list of {"mime_type", "uri"|"data"} for reference_to_video
+    images: list of {"mime_type", "uri"|"data"} — first/last frames for
+    image_to_video, or character/scene refs for reference_to_video
     video:  {"mime_type", "uri"} for edit / extend from a prior clip
 
     response_format is validated per task and the request is rejected outright

@@ -26,9 +26,17 @@ from app.prompt_utils import (
     download_image_bytes,
     extract_reference_urls,
     extract_spoken_lines,
+    frame_lock_prefix,
     reference_lock_prefix,
     rewrite_image_refs,
 )
+
+GENERATE_KINDS = {
+    "text_to_video": "text_to_video",
+    "image_to_video": "image_to_video",
+    "frames_to_video": "image_to_video",
+    "reference_to_video": "reference_to_video",
+}
 
 
 # Verified against the API: editing a 16s clip returns
@@ -108,9 +116,8 @@ class Job:
                 and self.duration_sec is not None
                 and self.duration_sec <= EDIT_MAX_INPUT_SEC
             ),
-            "reuse_ready": bool(
-                (self.meta.get("gcs_ref_items") or self.meta.get("gcs_refs"))
-            ),
+            "generate_task": self.meta.get("generate_task") or self.meta.get("task"),
+            "reuse_ready": _reuse_ready(self),
             "shot_list": self.meta.get("shot_list"),
         }
 
@@ -141,6 +148,25 @@ class JobStore:
 
 
 job_store = JobStore()
+
+
+def _reuse_ready(job: Job) -> bool:
+    if job.meta.get("gcs_ref_items") or job.meta.get("gcs_refs"):
+        return True
+    kind = job.meta.get("generate_task") or job.meta.get("task")
+    return job.mode == "generate" and kind == "text_to_video" and bool(
+        job.meta.get("shot_list")
+    )
+
+
+def resolve_generate_kind(generate_task: str | None, image_count: int) -> tuple[str, str]:
+    """Map UI kind → Omni task. Empty kind infers from whether images were sent."""
+    kind = (generate_task or "").strip().lower()
+    if kind in GENERATE_KINDS:
+        return kind, GENERATE_KINDS[kind]
+    if image_count <= 0:
+        return "text_to_video", "text_to_video"
+    return "reference_to_video", "reference_to_video"
 
 
 async def _submit_and_finalize(job: Job, *, payload: dict[str, Any]) -> None:
@@ -292,6 +318,7 @@ async def run_generation_job(
     source_job_id: str | None = None,
     enhance_prompt: bool = True,
     reuse_images: list[dict[str, str]] | None = None,
+    generate_task: str | None = None,
 ) -> None:
     try:
         duration_str = f"{duration}s"
@@ -306,6 +333,7 @@ async def run_generation_job(
             "aspect_ratio": aspect_ratio,
             "generate_audio": generate_audio,
             "model": settings.omni_model,
+            "generate_task": (generate_task or "").strip().lower() or None,
         }
 
         if mode in {"continue", "edit", "extend"}:
@@ -364,27 +392,30 @@ async def run_generation_job(
             await _submit_and_finalize(job, payload=payload)
             return
 
+        requested_kind = (generate_task or "").strip().lower() or None
+        skip_images = requested_kind == "text_to_video"
+
         cleaned_prompt, parsed_urls = extract_reference_urls(prompt)
-        resolved_urls = image_urls or parsed_urls
-        prompt_body = cleaned_prompt if parsed_urls else prompt
-        client_images = client_images or []
+        resolved_urls = [] if skip_images else (image_urls or parsed_urls)
+        prompt_body = prompt if skip_images else (cleaned_prompt if parsed_urls else prompt)
+        client_images = [] if skip_images else (client_images or [])
+        reuse_images = [] if skip_images else (reuse_images or [])
 
         job.meta.update(
             {
-                "image_count": max(len(resolved_urls), len(client_images)),
-                "parsed_from_prompt": bool(parsed_urls) and not image_urls,
+                "image_count": max(len(resolved_urls), len(client_images), len(reuse_images)),
+                "parsed_from_prompt": bool(parsed_urls) and not image_urls and not skip_images,
                 "client_images": len(client_images),
             }
         )
 
         use_gcs = bool(gcs_prefix_for_inputs())
         images: list[dict[str, str]] = []
-        reuse_images = reuse_images or []
 
         if reuse_images:
             job.touch(
                 JobStatus.submitting,
-                f"Reusing {len(reuse_images)} reference image(s) already on GCS…",
+                f"Reusing {len(reuse_images)} image(s) already on GCS…",
             )
             for item in reuse_images:
                 uri = (item.get("uri") or "").strip()
@@ -398,7 +429,7 @@ async def run_generation_job(
                 )
             if not images:
                 raise omni_client.OmniAPIError(
-                    "reuse_job_id has no gs:// reference images to reuse"
+                    "reuse_job_id has no gs:// images to reuse"
                 )
             job.meta["image_count"] = len(images)
             job.meta["image_delivery"] = "gcs_reuse"
@@ -430,16 +461,10 @@ async def run_generation_job(
                         data_b64 = data_b64.split(",", 1)[1]
                     images.append({"mime_type": mime, "data": data_b64})
                 job.meta["image_delivery"] = "browser_base64"
-        else:
-            if not resolved_urls:
-                job.touch(
-                    JobStatus.submitting,
-                    "No reference images — text_to_video…",
-                )
-
+        elif resolved_urls:
             job.touch(
                 JobStatus.downloading,
-                f"Fetching {len(resolved_urls)} reference image(s)…",
+                f"Fetching {len(resolved_urls)} image(s)…",
             )
             local_refs: list[str] = []
             for idx, url in enumerate(resolved_urls, start=1):
@@ -484,22 +509,35 @@ async def run_generation_job(
             if use_gcs:
                 job.meta["local_refs"] = local_refs
                 _persist_gcs_refs(job, images)
+        else:
+            job.touch(JobStatus.submitting, "No images — text_to_video…")
+
+        kind, api_task = resolve_generate_kind(requested_kind, len(images))
+        job.meta["generate_task"] = kind
+        job.meta["api_task"] = api_task
+        job.meta["image_count"] = len(images)
+
+        if api_task == "text_to_video" and images:
+            images = []
+            job.meta["image_count"] = 0
+            job.meta["images_ignored"] = "text_to_video does not send stills"
+        elif kind == "frames_to_video" and len(images) != 2:
+            raise omni_client.OmniAPIError(
+                "First + last frame needs exactly two images (first, then last)"
+            )
+        elif api_task == "image_to_video" and not (1 <= len(images) <= 2):
+            raise omni_client.OmniAPIError(
+                "image_to_video needs 1 still (first frame) or 2 stills (first + last)"
+            )
+        elif api_task == "reference_to_video" and not images:
+            raise omni_client.OmniAPIError(
+                "reference_to_video needs at least one reference image "
+                "(upload a file, paste a URL, or pick Load example)"
+            )
 
         rewritten = rewrite_image_refs(prompt_body, len(images))
         spoken = extract_spoken_lines(prompt_body)
         job.meta["shot_list"] = prompt_body
-        motion_note = prompt_enhancer.DEFAULT_MOTION_NOTE
-        if enhance_prompt:
-            job.touch(JobStatus.submitting, "Writing motion notes…")
-            mot = await prompt_enhancer.motion_addendum(rewritten)
-            job.meta["prompt_enhanced"] = mot["enhanced"]
-            job.meta["prompt_enhance_reason"] = mot["reason"]
-            motion_note = mot["prompt"]
-        else:
-            job.meta["prompt_enhanced"] = False
-            job.meta["prompt_enhance_reason"] = "static motion note"
-
-        lock = reference_lock_prefix(len(images))
         speech = dialogue_lock(prompt_body)
         control = build_control_prefix(
             duration=duration_str,
@@ -510,18 +548,51 @@ async def run_generation_job(
             no_bgm=no_bgm,
             spoken_lines=spoken,
         )
-        parts = [control]
-        if lock:
-            parts.append(lock)
-        parts.append(speech)
-        parts.append(rewritten)
-        parts.append(motion_note)
-        if images:
-            parts.append(
-                "Use the given image(s) as references for video generation. "
-                "The images should not be used as literal initial frames."
-            )
-        final_prompt = "\n\n".join(parts)
+
+        motion_note = ""
+        lock = ""
+        extra = ""
+        if api_task == "text_to_video":
+            body_text = rewritten
+            if enhance_prompt:
+                job.touch(JobStatus.submitting, "Polishing shot list…")
+                polished = await prompt_enhancer.enhance(rewritten, kind="generate")
+                job.meta["prompt_enhanced"] = polished["enhanced"]
+                job.meta["prompt_enhance_reason"] = polished["reason"]
+                if polished["enhanced"]:
+                    job.meta["prompt_original"] = rewritten
+                    body_text = polished["prompt"]
+            else:
+                job.meta["prompt_enhanced"] = False
+                job.meta["prompt_enhance_reason"] = "disabled"
+            parts = [control, speech, body_text]
+        else:
+            if enhance_prompt:
+                job.touch(JobStatus.submitting, "Writing motion notes…")
+                mot = await prompt_enhancer.motion_addendum(rewritten)
+                job.meta["prompt_enhanced"] = mot["enhanced"]
+                job.meta["prompt_enhance_reason"] = mot["reason"]
+                motion_note = mot["prompt"]
+            else:
+                job.meta["prompt_enhanced"] = False
+                job.meta["prompt_enhance_reason"] = "static motion note"
+                motion_note = prompt_enhancer.DEFAULT_MOTION_NOTE
+            if api_task == "image_to_video":
+                lock = frame_lock_prefix(len(images))
+            else:
+                lock = reference_lock_prefix(len(images))
+                extra = (
+                    "Use the given image(s) as references for video generation. "
+                    "The images should not be used as literal initial frames."
+                )
+            parts = [control]
+            if lock:
+                parts.append(lock)
+            parts.extend([speech, rewritten, motion_note])
+            if extra:
+                parts.append(extra)
+
+        final_prompt = "\n\n".join(p for p in parts if p)
         job.meta["final_prompt_preview"] = final_prompt[:4000]
 
         payload = omni_client.build_payload(
@@ -530,6 +601,7 @@ async def run_generation_job(
             duration=duration_str,
             resolution=resolution,
             aspect_ratio=aspect_ratio,
+            task=api_task,
         )
         await _submit_and_finalize(job, payload=payload)
     except Exception as exc:

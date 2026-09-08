@@ -8,12 +8,15 @@
 
 | 界面模式 | 实际 API `task` | 作用 |
 | --- | --- | --- |
-| **Generate** | `reference_to_video` 或 `text_to_video` | 分镜 + 可选参考图 → 新视频 |
+| **Generate → Text** | `text_to_video` | 纯文本分镜 → 新视频 |
+| **Generate → First frame** | `image_to_video` | 一张静帧作为**第一帧** |
+| **Generate → First + last** | `image_to_video` | 两张静帧之间插值运镜 |
+| **Generate → References** | `reference_to_video` | 参考图锁定人物/画风（不当首帧） |
 | **Continue edit** | `edit` | 以上一条成片为源，自然语言再改一刀 |
 | **Edit video** | `edit` | 指定任意 `gs://` 源视频做单次局部改动 |
 | **Extend** | `extend` | 在片尾续写 3–10 秒，返回**拼接后的完整成片** |
 
-本 Demo **没有**接首尾帧插值（`image_to_video` 双图）和参考视频；那些能力在学习指南里有说明。
+本 Demo **没有**接参考视频（`reference_to_video` 的 video input）。首尾帧与文生、参考生视频均已在界面里提供。
 
 ## 工作原理（为何要下图、为何要 GCS）
 
@@ -24,12 +27,12 @@ Omni 的 Interactions API **不接受任意 HTTPS 图片链接**，只接受：
 
 因此本服务会：
 
-1. 浏览器读取参考图（也可粘贴 URL，由服务端下载）
+1. 浏览器读取图片（**本地上传**，或粘贴公网 URL；URL 需要目标站点允许 CORS）
 2. 上传到 `INPUT_GCS_URI`（推荐），再把 `gs://` 交给 Omni
 3. Omni 把成片写到 `OUTPUT_GCS_URI`
 4. 页面用 **GCS 签名 URL** 播放，不经过本机再下一遍整段 MP4
 
-没有配置 GCS 时会退回 base64 直传 / 本机落盘，大文件不稳定，生产环境请务必配 bucket。
+没有配置 GCS 时会退回 base64 直传 / 本机落盘，大文件不稳定，生产环境请务必配 bucket。Cloud Run 上同样是浏览器把图发给服务，再写入 GCS，**不需要**把图先放到自己的电脑之外的网盘。
 
 **Continue 不是多轮 chat。** 该模型在 Agent Platform 上会拒绝 `previous_interaction_id`，所以每一轮 Continue / Edit / Extend 都是一次新的 Interaction，把上一条成片的 `gs://` 再挂进去。
 
@@ -81,18 +84,21 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 ## 界面怎么用
 
-1. 点 **Load example**，或自己贴分镜。提示词里如果带 `参考图：["https://…"]` 数组，会自动填入参考图列表。
-2. 用 `@图片1` / `@图片2` 把角色、场景绑到对应参考图（服务端会改写成 Omni 的 `<IMAGE_REF_0>`）。
-3. 确认时长（默认 8s）、分辨率（默认 720p）、画幅（默认 16:9），以及音频相关开关。
-4. 点 **Generate video**。成片出现在右侧 Result。
+1. 先选 Generate 下的能力：**Text → video** / **First frame** / **First + last** / **References**。点「试用示例」或 **Load example** 填入对应提示词（和示例图）。
+2. 需要图片时，可 **Upload files** 从本地上传，或粘贴公网 URL。References 模式用 `@图片1` 绑定角色。
+3. 确认时长、分辨率、画幅，以及音频相关开关。
+4. 点主按钮生成。成片出现在右侧 Result。
 5. 用「以此结果继续编辑 / 编辑 / 续写」，或点建议气泡，在同一条素材上迭代。
-6. **重新生成**会复用该任务已经上传到 GCS 的参考图，不必再下一次图。
+6. **重新生成**会复用该任务已经上传到 GCS 的图片（文生视频则复用分镜）。
 
-### 四种模式的差异
+### 生成能力怎么选
 
-- **Generate**：可调时长、分辨率、画幅；参考图与音频开关仅此模式生效。有参考图时 **不会改写分镜原文**，只在后面追加「动作与运镜」说明，避免 LLM 把人物画风写崩。
-- **Continue / Edit**：都是 `task=edit`。时长和画幅沿用源视频，只能改分辨率。源片 **不得超过 10 秒**（续写后的 16s 成片不能再 Edit）。指令宜短，服务端会补上 `Keep everything else the same.`
-- **Extend**：只能设本次续写时长（3–10s）。源片 1–30s，Omni Flash 成片最长约 40s。返回的是 **原片 + 新片段** 的完整视频，不是只返回新增那几秒。
+- **Text → video**：不需要图。适合没有角色一致性的镜头。
+- **First frame**：图是成片第 0 帧。提示词只写怎么动，不要重写人物长相。
+- **First + last**：两张图分别是开场和收束，模型在中间插值运镜。API 仍是 `image_to_video`。
+- **References**：图锁定人物/画风，**不当**第一帧。分镜用 `@图片N` 绑定。
+- **Continue / Edit**：`task=edit`。源片 **不得超过 10 秒**。指令宜短。
+- **Extend**：本次续写 3–10s，返回拼接后的完整成片。源片 1–30s，总长约 40s。
 
 Comparison 面板可以把同一条血缘链上的成片并排同步播放。任务状态存在进程内存里，重启服务或 Cloud Run 缩到 0 后历史会丢，**成片仍在 GCS**。
 
@@ -120,8 +126,9 @@ Omni 的 Interactions URL 固定为 `locations/global`，与部署区域无关�
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | `GET` | `/api/health` | 项目、模型、GCS、代理、runtime |
-| `GET` | `/api/example` | 示例分镜 + 参考图 URL |
-| `POST` | `/api/generate` | 启动任务（`mode`: generate / continue / edit / extend） |
+| `GET` | `/api/example` | 参考图模式的默认示例 |
+| `GET` | `/api/examples` | 各 generate task / edit / extend 的示例提示词 |
+| `POST` | `/api/generate` | 启动任务；`generate_task` 指定文生 / 首帧 / 首尾帧 / 参考 |
 | `GET` | `/api/jobs` | 最近任务 |
 | `GET` | `/api/jobs/{id}` | 轮询状态；含 `editable`、`reuse_ready`、`duration_sec` |
 | `GET` | `/api/jobs/{id}/video` | 本机文件或 302 到签名 URL |
@@ -131,7 +138,7 @@ Omni 的 Interactions URL 固定为 `locations/global`，与部署区域无关�
 | `POST` | `/api/test-gcs-upload` | 只测浏览器 → GCS，不调 Omni |
 | `GET` | `/api/fetch-image?url=` | 服务端代下参考图 |
 
-`POST /api/generate` 常用字段：`prompt`、`reference_images`（base64）、`image_urls`、`duration`（3–10）、`resolution`、`aspect_ratio`、`mode`、`source_job_id` / `source_video_uri`、`reuse_job_id`、`enhance_prompt`。
+`POST /api/generate` 常用字段：`prompt`、`generate_task`、`reference_images`（本地/URL 读出的 base64）、`image_urls`、`duration`（3–10）、`resolution`、`aspect_ratio`、`mode`、`source_job_id` / `source_video_uri`、`reuse_job_id`、`enhance_prompt`。
 
 超过 10 秒的成片，建议接口只给 **extend**，不再给 edit。
 
@@ -172,8 +179,9 @@ app/prompt_utils.py      解析 URL、@图片N → <IMAGE_REF_N>、台词锁
 app/prompt_enhancer.py   动作补丁、续写润色、建议气泡
 app/gcs_util.py          上传、签名 URL、时长探测
 app/main.py              FastAPI
-static/                  前端
+static/                  前端（能力切换、本地上传、示例芯片）
 deploy/cloud-run.sh      一键部署
+learning_guide.md        Omni 能力与提示词
 .env.example             配置模板（不要提交真实 .env）
 ```
 

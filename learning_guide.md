@@ -95,16 +95,20 @@ POST https://aiplatform.googleapis.com/v1beta1/projects/PROJECT_ID/locations/glo
 
 成片参数（`response_format`）三者都生效：`aspect_ratio`、`resolution`、`duration`（`3s`–`10s`）。
 
+本 Demo：Generate → **Text → video**。不需要图；「试用示例」里有庭院灯笼、竖屏夜市、微距水滴。
+
 文档：[Generate videos from text](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/video/generate-videos-from-text-prompts)（路径以控制台「What's next」为准）。
 
 ### 3.2 `image_to_video` — 图作**第一帧**（可选最后一帧）
 
 把图片当作 **字面意义上的起始画面**，而不是「长得像这张图的角色」。适合运镜、转场、loop。
 
-- 一张图：从该帧开始演。
-- 两张图（首 + 尾）：在两帧之间插值，适合环绕、推拉、无缝循环。见 [first and last frames](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/video/generate-videos-from-first-and-last-frames)。
+- 一张图：从该帧开始演。Demo 里是 **First frame**。
+- 两张图（首 + 尾）：在两帧之间插值，适合环绕、推拉、无缝循环。Demo 里是 **First + last**（API 仍是 `image_to_video`，只是必须两张、顺序为先首后尾）。见 [first and last frames](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/video/generate-videos-from-first-and-last-frames)。
 
-**本 Demo 未实现。** 界面里的参考图走的是下一节的 `reference_to_video`。
+提示词只写 **从这一帧怎么动**，不要重写人物长相。图可以本地上传或贴公网 URL。
+
+文档：[Generate videos from an image](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/video/generate-videos-from-an-image)。
 
 ### 3.3 `reference_to_video` — 参考图 / 参考视频「像它」，不当首帧
 
@@ -112,13 +116,15 @@ POST https://aiplatform.googleapis.com/v1beta1/projects/PROJECT_ID/locations/glo
 
 > Use the given image(s) as references for video generation. The images should not be used as literal initial frames.
 
-也可以同时挂参考 **视频**（风格或主体），本 Demo 只用图片。
+也可以同时挂参考 **视频**（风格或主体），本 Demo 只用图片（本地上传或 URL）。
 
 绑定方式（本 Demo 按官方 cookbook 做的）：
 
 1. 提示词顶部：`[# References <IMAGE_REF_0>@Image1 <IMAGE_REF_1>@Image2 …]`
 2. 分镜里用 `<IMAGE_REF_0>` 指第一张图。用户写 `@图片1` / `Image 1` 时，服务端会改成 0-based 标签。
 3. 不要在文本里再散文式重写五官和画风，否则文本会 **盖过** 参考图。
+
+本 Demo：Generate → **References**。用 `@图片1` 绑定；「试用示例」会填入公开静帧，可再换成自己的上传。
 
 文档：[Generate videos from references](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/video/generate-videos-from-references)。
 
@@ -212,6 +218,14 @@ Omni 对提示词 **跟得紧，但自己很少补电影感**。分镜太干，�
 
 本 Demo **不会让 LLM 重写分镜**（曾经重写过，人物和画风会被文本覆盖）。只在原文后追加一段「动作与运镜（必须全部发生）」：把分镜里已有的动作再说一遍必须演出来，并加很轻的运镜。
 
+### 文生视频（无图）
+
+写清主体、动作、镜头、光线。没有参考图时 Demo 允许把分镜略写得更有镜头感。
+
+### 首帧 / 首尾帧
+
+不要写「不要把图当第一帧」。写清楚运镜：slow push-in、orbit、dolly between the two stills。本地上传与 URL 均可。
+
 ### 编辑
 
 一句英文或中文祈使句 + `Keep everything else the same.`  
@@ -242,14 +256,14 @@ Omni 对提示词 **跟得紧，但自己很少补电影感**。分镜太干，�
 
 已覆盖：
 
-- `text_to_video`（无参考图）与 `reference_to_video`（浏览器图 → GCS）
+- `text_to_video`、`image_to_video`（一张首帧，或两张首+尾帧）、`reference_to_video`（浏览器图 / 本地上传 → GCS）
 - `edit`（Continue / Edit 两个入口，同一 task）
 - `extend`（完整拼接成片、10s 编辑上限提示）
-- GCS 出入、签名播放、血缘对比、建议气泡、参考图复用（重新生成）
+- GCS 出入、签名播放、血缘对比、建议气泡、图片复用（重新生成）
+- 界面按能力切换：Text / First frame / First + last / References，以及可点的示例提示词
 
 未覆盖（官方支持，可自行扩展）：
 
-- `image_to_video` 首帧 / 首尾帧插值
 - 参考 **视频**（`reference_to_video` 的 video input）
 - 官方异步 `background: true`（本 Demo 自己 poll）
 - 控制台 Media Studio；仅 REST
@@ -273,4 +287,4 @@ Omni 对提示词 **跟得紧，但自己很少补电影感**。分镜太干，�
 2. [模型卡片](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/omni-1-1-flash) 看配额与 MIME。
 3. [参考生视频](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/video/generate-videos-from-references) → [编辑](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/video/edit-videos) → [续写](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/video/extend-videos)。
 4. 仓库里 `app/omni_client.py` 的 `build_payload()`、`app/jobs.py` 的模式分支，对照一次真实请求。
-5. 跑通 [README](./README.md) 的 Load example → Generate → Edit → Extend。
+5. 打开 Demo：试用示例 → 四种 Generate → Edit → Extend。本地图走 **Upload files**。
