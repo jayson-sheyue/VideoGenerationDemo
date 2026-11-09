@@ -89,9 +89,10 @@ Optional: `REGION`, `SERVICE`, `OMNI_MODEL`, `ALLOW_UNAUTHENTICATED=false`. The 
 - Slow generations—treat as async jobs.
 - No Veo-style `generate_audio` flag; dialogue is prompt-locked.
 - Voice / dialogue content cannot be edited; picture edits can.
-- Extend `response_format` must not send `aspect_ratio` (live API rejects it).
+- Extend `response_format` must send **resolution only** (live 1.2 rejects `duration` / `aspect_ratio` with opaque Internal error); append length goes in the prompt (`Extend by Ns.`).
 - Upscale rejects any text part.
 - After upscale, Edit / Extend must re-send `gs://`.
 - Failed Omni interactions surface the API `errors` text in the job message.
+- Stock / CMAF **fragmented MP4** inputs (`iso5` + `moof`, `mvhd.duration=0`) often make Omni return `invalid_request: Internal error encountered.` Edit / extend / upscale remux those to progressive faststart before submit; job meta may show `source_remuxed: true`.
 
 See [learning_guide.md](./learning_guide.md) for the full task matrix.

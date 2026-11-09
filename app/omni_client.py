@@ -148,8 +148,10 @@ def build_payload(
 
     response_format is trimmed per task. The live API rejects fields a task
     does not accept:
-      edit / upscale — resolution only
-      extend — duration only (aspect_ratio is rejected despite some docs)
+      edit / upscale / extend — resolution only
+      (Docs still show duration/aspect_ratio for extend; on 1.2 GA those
+      fields commonly fail with opaque invalid_request / Internal error.
+      Put the append length in the prompt, e.g. "Extend by 8 seconds. …")
     """
     images = images or []
     videos = videos or []
@@ -174,10 +176,8 @@ def build_payload(
         input_items.append({"type": "text", "text": prompt})
 
     response_format: dict[str, Any] = {"type": "video"}
-    if task in {"edit", "upscale"}:
+    if task in {"edit", "upscale", "extend"}:
         response_format["resolution"] = resolution
-    elif task == "extend":
-        response_format["duration"] = duration
     else:
         response_format["aspect_ratio"] = aspect_ratio
         response_format["resolution"] = resolution

@@ -51,19 +51,21 @@ class PayloadTests(unittest.TestCase):
         self.assertNotIn("aspect_ratio", fmt)
         self.assertEqual(fmt["resolution"], "1080p")
 
-    def test_extend_sends_duration_only(self):
+    def test_extend_sends_resolution_only(self):
+        # Live 1.2 rejects response_format.duration on extend (Internal error /
+        # recitation). GenMedia / verified calls use resolution only.
         payload = build_payload(
-            prompt="Continue as she smiles.",
+            prompt="Extend by 6 seconds. Continue as she smiles.",
             duration="6s",
-            resolution="4k",
+            resolution="720p",
             aspect_ratio="9:16",
             task="extend",
             model=OMNI_12.id,
             video={"mime_type": "video/mp4", "uri": "gs://bucket/clip.mp4"},
         )
         fmt = payload["response_format"][0]
-        self.assertEqual(fmt["duration"], "6s")
-        self.assertNotIn("resolution", fmt)
+        self.assertEqual(fmt["resolution"], "720p")
+        self.assertNotIn("duration", fmt)
         self.assertNotIn("aspect_ratio", fmt)
         self.assertEqual(payload["input"][0]["type"], "video")
 
@@ -229,6 +231,78 @@ class PayloadTests(unittest.TestCase):
         self.assertAlmostEqual(mvhd_duration_sec(progressive) or 0, 10.0)
         self.assertFalse(mp4_is_fragmented(progressive))
         self.assertFalse(mp4_needs_remux(progressive))
+
+    def test_remux_to_progressive_restores_mvhd_duration(self):
+        """Lossless remux must leave a readable non-zero mvhd (Omni source gate)."""
+        import subprocess
+        import tempfile
+        from pathlib import Path
+
+        import imageio_ffmpeg
+
+        from app.gcs_util import (
+            mp4_is_fragmented,
+            mp4_needs_remux,
+            mvhd_duration_sec,
+            remux_to_progressive_mp4,
+        )
+
+        ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+        with tempfile.TemporaryDirectory() as tmp:
+            progressive = Path(tmp) / "progressive.mp4"
+            frag = Path(tmp) / "frag.mp4"
+            out = Path(tmp) / "out.mp4"
+            # Build a tiny clip, then force fragmented packaging (mvex/moof, often duration 0).
+            make = subprocess.run(
+                [
+                    ffmpeg,
+                    "-y",
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "color=c=black:s=160x160:d=1",
+                    "-c:v",
+                    "libx264",
+                    "-pix_fmt",
+                    "yuv420p",
+                    str(progressive),
+                ],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(make.returncode, 0, make.stderr)
+            frag_cmd = subprocess.run(
+                [
+                    ffmpeg,
+                    "-y",
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-i",
+                    str(progressive),
+                    "-c",
+                    "copy",
+                    "-movflags",
+                    "frag_keyframe+empty_moov+default_base_moof",
+                    str(frag),
+                ],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(frag_cmd.returncode, 0, frag_cmd.stderr)
+            head = frag.read_bytes()[:256 * 1024]
+            self.assertTrue(mp4_needs_remux(head), "fixture must look like stock fMP4")
+            remux_to_progressive_mp4(frag, out)
+            remuxed = out.read_bytes()
+            duration = mvhd_duration_sec(remuxed[:65536])
+            self.assertIsNotNone(duration)
+            self.assertGreater(duration or 0, 0.5)
+            self.assertFalse(mp4_is_fragmented(remuxed[:256 * 1024]))
+            self.assertFalse(mp4_needs_remux(remuxed[:65536]))
+            self.assertFalse(mp4_needs_remux(progressive.read_bytes()[:65536]))
 
 
 class ApiTests(unittest.TestCase):

@@ -156,7 +156,8 @@ function extendInputSummary(profile) {
   if (profile.extend_input_max == null) {
     return (
       "1.2：源片可为任意长度。模型只「看」最后约 10 秒当上下文来演下一段；" +
-      "成片里只「留」源片最后约 30 秒再接上新的 3–10 秒（不是 15 秒），总长约 ≤ 40 秒。更早的画面会被裁掉。"
+      "成片里只「留」源片最后约 30 秒再接上新的 3–10 秒（不是 15 秒），总长约 ≤ 40 秒。更早的画面会被裁掉。" +
+      "Duration 会写进提示词；接口只传 resolution（不要指望 response_format.duration）。"
     );
   }
   return (
@@ -539,7 +540,8 @@ function setMode(mode) {
   sourceVideoField.hidden = isGenerate;
   audioToggles.hidden = !isGenerate;
   durationField.hidden = mode === "continue" || mode === "edit" || mode === "upscale";
-  resolutionField.hidden = mode === "extend";
+  // Extend needs resolution in response_format (duration belongs in the prompt).
+  resolutionField.hidden = false;
   aspectField.hidden = !isGenerate;
   if (promptField) promptField.hidden = mode === "upscale";
   enhanceToggle.hidden = !(isGenerate || mode === "extend");

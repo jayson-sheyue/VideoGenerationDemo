@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import traceback
 import uuid
 from dataclasses import dataclass, field
@@ -605,6 +606,16 @@ async def run_generation_job(
                 if polished["enhanced"]:
                     job.meta["prompt_original"] = edit_prompt
                     edit_prompt = polished["prompt"]
+            # Live extend rejects response_format.duration (opaque Internal error /
+            # recitation). Keep the UI duration by prefixing the prompt instead.
+            if api_task == "extend":
+                extend_secs = int(duration)
+                if not re.search(
+                    rf"(?i)\bextend(?:ing)?\s+by\s+{extend_secs}\s*s(?:ec(?:ond)?s?)?\b",
+                    edit_prompt,
+                ):
+                    edit_prompt = f"Extend by {extend_secs} seconds. {edit_prompt}"
+                job.meta["extend_duration_via"] = "prompt"
             if api_task == "edit" and "keep everything else" not in edit_prompt.lower():
                 edit_prompt = (
                     f"{edit_prompt.rstrip('.')}. Keep everything else the same."
@@ -618,6 +629,10 @@ async def run_generation_job(
             if api_task == "upscale":
                 job.meta["upscale_note"] = (
                     "No text was sent. Upscale takes the source video and a higher resolution only."
+                )
+            if api_task == "extend":
+                job.meta["extend_note_format"] = (
+                    "response_format sends resolution only; append length is in the prompt."
                 )
             job.meta["image_count"] = len(edit_images)
             payload = omni_client.build_payload(

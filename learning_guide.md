@@ -205,7 +205,7 @@ Veo 的 reference 还有 `asset` / `style` 类型且张数更少；Omni 走 Inte
 - 还可以继续 Extend，直到接近约 40s；再续也不会稳定涨到 45s
 - **不能**按「15 + 15 + 15」理解：单次续写最多 10 秒，不是 15 秒
 
-`response_format` 实测 **只传 `duration`**。文档示例里的 `aspect_ratio` 会被线上拒绝。分辨率沿用源片，不要在 extend 请求里再塞 `resolution`。
+`response_format` 实测 **只传 `resolution`**（与 edit/upscale 相同）。文档示例里的 `aspect_ratio` / `duration` 在 1.2 GA 线上常触发含糊的 `invalid_request: Internal error` 或 `recitation`；续写秒数改写进提示词（`Extend by Ns. …`）。
 
 提示词应写 **片尾之后** 的动作/运镜/环境变化，不要把原片再描述一遍，也不要新开无关场景或第二个主角。
 
@@ -222,7 +222,7 @@ API 对「这个 task 不该出现的字段」是直接 4xx，而不是忽略。
 | `text_to_video` / `image_to_video` / `reference_to_video` | ✓ | ✓ | ✓（1.2 为 3s–15s；首尾帧 3s–10s；1.1 为 3s–10s） | 推荐 |
 | `edit` | ✕ | ✓ | ✕（跟源片） | 推荐 |
 | `upscale`（仅 1.2） | ✕ | ✓（目标分辨率） | ✕ | 推荐 |
-| `extend` | ✕（文档有、线上拒） | ✕ | ✓（本次续写 3s–10s） | 推荐 |
+| `extend` | ✕ | ✓（输出分辨率） | ✕（文档有；线上改用提示词 `Extend by Ns.`） | 推荐 |
 
 画幅取值：`16:9`、`9:16`。分辨率：`360p`、`720p`、`1080p`、`4k`。时长字符串必须带 `s`，例如 `"8s"`。
 

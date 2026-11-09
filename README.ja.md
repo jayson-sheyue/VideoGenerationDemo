@@ -56,8 +56,9 @@ PROJECT_ID=your-gcp-project BUCKET=your-gcs-bucket ./deploy/cloud-run.sh
 
 - 非同期ジョブとして扱うこと。
 - 音声ファイル入力なし。台詞編集不可。
-- Extend は `aspect_ratio` を送ると拒否される。
+- Extend の `response_format` は **resolution のみ**（`duration` / `aspect_ratio` は 1.2 GA で Internal error になりやすい）。追加秒数はプロンプトへ（`Extend by Ns.`）。
 - Upscale はテキスト不可。Upscale 後の Edit/Extend は `gs://` を再送。
 - 失敗時は Omni の `errors` 原文を `message` に出す。
+- 素材サイトの **fragmented / CMAF MP4**（`iso5` + `moof`、`mvhd.duration=0`）は Omni で `invalid_request: Internal error encountered.` になりやすい。本 Demo は edit / extend / upscale 前に progressive へ remux し、成功時 meta に `source_remuxed: true` が出る。
 
 詳細は [learning_guide.md](./learning_guide.md) を参照。
