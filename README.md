@@ -27,11 +27,13 @@ Official sources: [Extend videos](https://docs.cloud.google.com/gemini-enterpris
 
 | | Omni 1.2 Flash | Omni 1.1 in this demo |
 | --- | --- | --- |
-| Extend **input** | **Any duration** (`extension: Any duration`; uses about the last 10s) | Still blocked above **30s** |
+| Extend **input** | **Any duration** | Still blocked above **30s** |
+| **Watch** (~10s) | Model uses about the **last 10s** only as context for what happens next | Same idea once a clip is accepted |
+| **Keep** (~30s) | Output keeps about the **last 30s** of the source, then appends the new segment; earlier footage is dropped | Same ~40s ceiling |
 | Per-call add | **3–10s** (not 15s) | Same 3–10s |
-| Output length | About ≤ **40s** (new segment concatenated onto about the last 30s of the input) | Same ~40s ceiling |
+| Output length | About ≤ **40s** ≈ last 30s of source + up to 10s new | Same ~40s ceiling |
 
-A 60s source extended by 10s still returns about 40s, not 70s. Do **not** plan `15 + 15 + 15 = 45`.
+A 60s source extended by 10s returns about **40s** (last 30 + new 10), not 70s. The “last 10s” line is the **context window**, not “only 10s of source survive in the file.” Do **not** plan `15 + 15 + 15 = 45`.
 
 ## How media moves
 

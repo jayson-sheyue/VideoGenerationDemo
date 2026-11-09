@@ -154,9 +154,15 @@ function applyCapabilityChrome() {
 
 function extendInputSummary(profile) {
   if (profile.extend_input_max == null) {
-    return "1.2：源片可为任意长度；模型只用最后约 10 秒，拼到最后约 30 秒上，成片约 ≤ 40 秒。单次新增 3–10 秒，不是 15 秒。";
+    return (
+      "1.2：源片可为任意长度。模型只「看」最后约 10 秒当上下文来演下一段；" +
+      "成片里只「留」源片最后约 30 秒再接上新的 3–10 秒（不是 15 秒），总长约 ≤ 40 秒。更早的画面会被裁掉。"
+    );
   }
-  return `1.1 / 本 Demo：源片必须 ≤ ${profile.extend_input_max} 秒。单次新增 3–10 秒，成片约 ≤ 40 秒。要接更长源片请切到 Omni 1.2。`;
+  return (
+    `1.1 / 本 Demo：源片必须 ≤ ${profile.extend_input_max} 秒。` +
+    "单次新增 3–10 秒；成片约 ≤ 40 秒（末约 30 秒源片 + 新段）。要接更长源片请切到 Omni 1.2。"
+  );
 }
 
 function parseLabels(text) {
@@ -314,6 +320,7 @@ const MODE_GUIDE = {
       "选择源视频。描述接下来几秒发生什么，不要重述原片。",
       "Duration 是本次新增长度（3–10s，不是 15s）。返回拼接后的完整成片。",
       "例如 8s 源片再续 8s → 约 16s。不要按 15+15+15 规划到 45s。",
+      "「看约 10 秒」是上下文；「留约 30 秒」是成片里保留的源片末尾。两件事不一样。",
     ],
     note: "",
     placeholder: "例：Continue as they watch the interface light up and smile.",

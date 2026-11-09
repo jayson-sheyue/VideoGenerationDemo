@@ -19,8 +19,9 @@
 | 生成 | 3–15 秒。首尾帧 3–10 秒 | 3–10 秒 |
 | 编辑输入 | ≤ 15 秒，可再加最多 2 张参考图 | ≤ 10 秒（线上实测 `Editing duration N exceeds maximum duration 10`） |
 | 多轮 | `store: true` + `previous_interaction_id`。状态约 7 天 | Agent Platform 会拒 `previous_interaction_id`，只能重传 `gs://` |
-| 续写输入 | **任意长度**（模型卡片：`extension: Any duration`）。只用最后约 10 秒做上下文 | 本 Demo **仍拦截 > 30 秒** 的源片（保守上限；1.1 卡片未单独写 Any duration） |
-| 续写输出 | 单次追加 3–10 秒，拼到源片最后约 30 秒上，成片约 ≤ **40 秒** | 单次同样 3–10 秒；成片同样约 ≤ 40 秒 |
+| 续写输入 | **任意长度**（模型卡片：`extension: Any duration`） | 本 Demo **仍拦截 > 30 秒** 的源片（保守上限；1.1 卡片未单独写 Any duration） |
+| 续写怎么用源片 | **看约 10 秒**（上下文）≠ **留约 30 秒**（成片保留窗）。模型只看最后约 10 秒来演下一段；输出文件只保留源片最后约 30 秒再接新段，更早画面裁掉 | 单次同样 3–10 秒；成片同样约 ≤ 40 秒 |
+| 续写输出 | 新段 3–10 秒 + 源片末尾约 30 秒 ≈ 成片 ≤ **40 秒** | 同上 |
 | 放大 | `task=upscale`，源片 ≤ 15 秒。只传源视频和目标分辨率，线上拒绝文字 | 不发送 |
 | Seed / labels | `generation_config.seed`（0–4294967295）；请求级 `labels` | 不发送 |
 | 参考视频 | 每条 prompt 最多 3 段。Gemini API 建议每段约 3 秒，声音会被忽略 | 文档同样列出，本 Demo 两种模型都可以挂 |
@@ -183,15 +184,20 @@ Veo 的 reference 还有 `asset` / `style` 类型且张数更少；Omni 走 Inte
 
 这是 **1.1 与 1.2 最容易讲错的差别之一**。官方依据：
 
-- [Extend videos](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/video/extend-videos)：Gemini Omni 可接受 **任意长度** 源片；只用最后约 10 秒生成 3–10 秒新段，并拼到源片最后约 30 秒上（成片约 ≤ 40 秒）。例如 60 秒源片再续 10 秒，出来仍约 40 秒。
-- [1.2 模型卡片](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/omni-1-2-flash)：`Maximum input video length (extension): Any duration (uses up to the last 10 seconds)`。
+- [Extend videos](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/video/extend-videos)：Gemini Omni 可接受 **任意长度** 源片。官方把两步写在一句里，容易读拧——实际是：
+  1. **上下文窗（约 10 秒）**：模型只看源片最后约 10 秒，用来决定「接下来怎么演」，并生成 3–10 秒新段。
+  2. **成片保留窗（约 30 秒）**：返回的文件不是「整段源片 + 新段」，而是「源片最后约 30 秒 + 新段」。源片更前面的部分会被裁掉。
+  所以 60 秒源片再续 10 秒 → 约 **40 秒** 成片（末 30 + 新 10），不是 70 秒。
+- [1.2 模型卡片](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/omni-1-2-flash)：`Maximum input video length (extension): Any duration (uses up to the last 10 seconds)`——括号里的 10 秒指的是**上下文**，不是成片只留 10 秒。
 - [1.1 模型卡片](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/omni-1-1-flash)：已 Deprecated，**没有**单独写 `extension: Any duration`。本 Demo 对 1.1 仍按 **源片 ≤ 30 秒** 拦截。
 
 | | Omni 1.2 Flash | Omni 1.1（本 Demo） | Veo（对照） |
 | --- | --- | --- | --- |
 | 源片长度 | **任意长度** | **≤ 30 秒**（本 Demo 保守上限） | 1–30 秒，常要求 24fps MP4 |
+| 上下文 | 源片最后约 **10 秒** | 同左（本 Demo 输入先被 30s 拦住） | — |
+| 成片里保留的源片 | 源片最后约 **30 秒** | 同左 | — |
 | 单次 `duration` | **3–10 秒**（本次新增） | 同样 3–10 秒 | 常约 7 秒 |
-| 成片总长 | **约 ≤ 40 秒** | 约 ≤ 40 秒 | 约 37 秒 |
+| 成片总长 | **约 ≤ 40 秒**（≈ 末 30 + 新 ≤10） | 约 ≤ 40 秒 | 约 37 秒 |
 
 返回的是 **拼接后的完整视频**：8s 源片再续 8s → 约 **16s**，不是只返回新的 8s。因此：
 
