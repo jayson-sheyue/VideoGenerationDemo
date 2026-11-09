@@ -209,7 +209,11 @@ Veo 的 reference 还有 `asset` / `style` 类型且张数更少；Omni 走 Inte
 
 提示词应写 **片尾之后** 的动作/运镜/环境变化，不要把原片再描述一遍，也不要新开无关场景或第二个主角。
 
-**源片容器**：素材站下载的 MP4 经常是 **fragmented / CMAF（iso5 + moof）**，`mvhd` 时长为 0。Omni 对此常返回含糊的 `invalid_request: Internal error encountered.`，本 Demo 的 `source_duration_sec` 也会显示 `0`。提交 edit/extend/upscale 前会自动 remux 成 progressive MP4（真实时长 + faststart）再送给 Omni。
+**源片容器与时长（线上实测，文档可能不一致）**：
+
+1. 素材站 MP4 常为 **fragmented / CMAF（iso5 + moof）**，`mvhd` 时长为 0 → remux 成 progressive。
+2. 即便已 remux，**源片偏长** 的 extend 仍常报 `Internal error`（官方写 Any duration；同片实测 25s/末 24s 失败、末 20s 成功）。本 Demo 续写前会自动裁到**最后 20 秒**；meta 可见 `source_trimmed: true`。
+3. extend 的 `response_format` 只传 `resolution`；秒数写进提示词。
 
 ---
 

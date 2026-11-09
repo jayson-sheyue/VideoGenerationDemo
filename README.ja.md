@@ -60,5 +60,6 @@ PROJECT_ID=your-gcp-project BUCKET=your-gcs-bucket ./deploy/cloud-run.sh
 - Upscale はテキスト不可。Upscale 後の Edit/Extend は `gs://` を再送。
 - 失敗時は Omni の `errors` 原文を `message` に出す。
 - 素材サイトの **fragmented / CMAF MP4**（`iso5` + `moof`、`mvhd.duration=0`）は Omni で `invalid_request: Internal error encountered.` になりやすい。本 Demo は edit / extend / upscale 前に progressive へ remux し、成功時 meta に `source_remuxed: true` が出る。
+- 本番 1.2 の **extend** は長めの progressive 源で Internal error になりやすい（ドキュメントは任意長；実測 25s/末 24s 失敗、末 20s 成功）。本 Demo は末尾 **20 秒**に切り出す（`source_trimmed: true`）。
 
 詳細は [learning_guide.md](./learning_guide.md) を参照。

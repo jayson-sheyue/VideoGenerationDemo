@@ -195,6 +195,12 @@ def mp4_needs_remux(head: bytes) -> bool:
     return mvhd_duration_sec(head) is None and head.find(b"mvhd") >= 0
 
 
+# Live Omni 1.2 extend: docs say any input length, but long progressive sources
+# fail with opaque ``Internal error encountered.`` Empirically on one stock clip:
+# 25.44s fail, last-24s fail, last-20s succeed (720p/1080p). Keep a safe tail.
+EXTEND_SOURCE_MAX_SEC = 20.0
+
+
 def remux_to_progressive_mp4(src: Path, dst: Path) -> None:
     """Lossless remux to a progressive MP4 with a real mvhd duration + faststart."""
     import subprocess
@@ -228,44 +234,112 @@ def remux_to_progressive_mp4(src: Path, dst: Path) -> None:
         )
 
 
+def trim_mp4_tail(src: Path, dst: Path, *, keep_sec: float) -> None:
+    """Keep only the last ``keep_sec`` seconds (stream copy + faststart)."""
+    import subprocess
+
+    import imageio_ffmpeg
+
+    if keep_sec <= 0:
+        raise OmniAPIError(f"trim keep_sec must be positive, got {keep_sec}")
+    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    proc = subprocess.run(
+        [
+            ffmpeg,
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-sseof",
+            f"-{keep_sec:g}",
+            "-i",
+            str(src),
+            "-c",
+            "copy",
+            "-movflags",
+            "+faststart",
+            str(dst),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0 or not dst.is_file() or dst.stat().st_size < 32:
+        raise OmniAPIError(
+            f"Failed to trim source video to the last {keep_sec:g}s for Omni. "
+            f"ffmpeg: {(proc.stderr or proc.stdout or '')[:800]}"
+        )
+
+
 def ensure_omni_source_mp4(
     gcs_uri: str,
     *,
     job_id: str,
+    max_tail_sec: float | None = None,
 ) -> tuple[str, float | None, dict[str, Any]]:
     """Return a progressive gs:// source Omni can ingest for edit/extend/upscale.
 
     Fragmented stock MP4s (iso5/CMAF) often report duration 0 and trigger an opaque
     Omni ``invalid_request: Internal error encountered.`` Remux those once.
+
+    When ``max_tail_sec`` is set (extend), also keep only the last N seconds —
+    longer progressive clips still Internal-error on live 1.2 despite "any duration".
     """
     meta: dict[str, Any] = {
         "source_video_uri_original": gcs_uri,
         "source_remuxed": False,
+        "source_trimmed": False,
     }
     head = _download_gcs_head(gcs_uri, head_bytes=256 * 1024)
     duration = mvhd_duration_sec(head) if head else None
-    needs = bool(head) and mp4_needs_remux(head)
-    if not needs and duration is not None:
+    needs_remux = bool(head) and mp4_needs_remux(head)
+    needs_trim = (
+        max_tail_sec is not None
+        and duration is not None
+        and duration > max_tail_sec + 0.05
+    )
+    if not needs_remux and not needs_trim and duration is not None:
         meta["source_duration_sec"] = duration
         return gcs_uri, duration, meta
-    if not needs and duration is None:
+    if not needs_remux and not needs_trim and duration is None:
         # Unknown container; still try the URI as-is.
         return gcs_uri, None, meta
 
     local_dir = local_ref_dir(job_id)
-    raw_path = local_dir / "source_raw.mp4"
-    remux_path = local_dir / "source_progressive.mp4"
-    download_gcs_bytes(gcs_uri, dest=raw_path)
-    remux_to_progressive_mp4(raw_path, remux_path)
-    duration = mvhd_duration_sec(remux_path.read_bytes()[:65536])
+    work = local_dir / "source_work.mp4"
+    download_gcs_bytes(gcs_uri, dest=work)
+    if needs_remux:
+        remux_path = local_dir / "source_progressive.mp4"
+        remux_to_progressive_mp4(work, remux_path)
+        work = remux_path
+        meta["source_remuxed"] = True
+        meta["source_remux_reason"] = "fragmented_mp4_or_zero_duration"
+        duration = mvhd_duration_sec(work.read_bytes()[:65536])
+        needs_trim = (
+            max_tail_sec is not None
+            and duration is not None
+            and duration > max_tail_sec + 0.05
+        )
+
+    if needs_trim and max_tail_sec is not None:
+        trim_path = local_dir / "source_tail.mp4"
+        trim_mp4_tail(work, trim_path, keep_sec=max_tail_sec)
+        meta["source_trimmed"] = True
+        meta["source_trim_keep_sec"] = max_tail_sec
+        meta["source_duration_before_trim_sec"] = duration
+        work = trim_path
+        duration = mvhd_duration_sec(work.read_bytes()[:65536])
+
+    if not meta["source_remuxed"] and not meta["source_trimmed"]:
+        meta["source_duration_sec"] = duration
+        return gcs_uri, duration, meta
+
     out_uri = build_input_object_uri(job_id, 1, ".mp4", stem="source")
-    upload_local_file_to_gcs(remux_path, gcs_uri=out_uri, mime_type="video/mp4")
+    upload_local_file_to_gcs(work, gcs_uri=out_uri, mime_type="video/mp4")
     meta.update(
         {
-            "source_remuxed": True,
             "source_video_uri": out_uri,
             "source_duration_sec": duration,
-            "source_remux_reason": "fragmented_mp4_or_zero_duration",
         }
     )
     return out_uri, duration, meta

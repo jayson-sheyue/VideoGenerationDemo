@@ -14,6 +14,7 @@ from app import omni_client, prompt_enhancer
 from app.config import OUTPUT_DIR, gcs_prefix_for_inputs, settings
 from app.model_catalog import ModelProfile, profile_for
 from app.gcs_util import (
+    EXTEND_SOURCE_MAX_SEC,
     mvhd_duration_sec,
     build_input_object_uri,
     ensure_omni_source_mp4,
@@ -525,8 +526,11 @@ async def run_generation_job(
                 )
 
             source_seconds = None
+            source_prep_meta: dict[str, Any] = {}
             # Edit/extend/upscale need a progressive MP4. Stock CMAF/fMP4 downloads
             # often have mvhd.duration=0 and trigger Omni "Internal error".
+            # Extend additionally trims to the last ~24s — live 1.2 Internal-errors
+            # on longer progressive sources despite "any duration" docs.
             if (
                 source_video_uri
                 and source_video_uri.startswith("gs://")
@@ -534,15 +538,20 @@ async def run_generation_job(
             ):
                 job.touch(
                     JobStatus.submitting,
-                    "Checking source clip (remux fragmented MP4 if needed)…",
+                    "Checking source clip (remux / trim for Omni if needed)…",
                 )
-                source_video_uri, source_seconds, remux_meta = await asyncio.to_thread(
-                    ensure_omni_source_mp4,
-                    source_video_uri,
-                    job_id=job.id,
+                source_video_uri, source_seconds, source_prep_meta = (
+                    await asyncio.to_thread(
+                        ensure_omni_source_mp4,
+                        source_video_uri,
+                        job_id=job.id,
+                        max_tail_sec=(
+                            EXTEND_SOURCE_MAX_SEC if api_task == "extend" else None
+                        ),
+                    )
                 )
                 job.source_video_uri = source_video_uri
-                job.meta.update(remux_meta)
+                job.meta.update(source_prep_meta)
                 job.meta["source_duration_sec"] = source_seconds
             elif source_video_uri and source_video_uri.startswith("gs://"):
                 job.touch(JobStatus.submitting, "Checking source clip length…")
@@ -566,7 +575,13 @@ async def run_generation_job(
                     f"Source clip is {source_seconds:g}s but {api_task} on {model_id} "
                     f"accepts at most {limit:g}s."
                 )
-            if (
+            if api_task == "extend" and source_prep_meta.get("source_trimmed"):
+                job.meta["extend_note"] = (
+                    f"Live Omni 1.2 fails on sources longer than ~{EXTEND_SOURCE_MAX_SEC:g}s "
+                    f"with Internal error; trimmed to the last {EXTEND_SOURCE_MAX_SEC:g}s "
+                    "before extend (docs still say any length)."
+                )
+            elif (
                 api_task == "extend"
                 and source_seconds is not None
                 and source_seconds > 30

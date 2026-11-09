@@ -207,5 +207,6 @@ learning_guide.md        Omni 能力与提示词
 - 放大之后的 Edit / Extend 不能再用 `previous_interaction_id` 接着改，必须重传成片的 `gs://`。
 - Omni 返回 `status=failed` 时，任务的 `message` 会带上接口 `errors` 原文（例如 `prohibited_content`），不再只写一句 `Omni interaction failed`。
 - 素材站常见的 **fragmented / CMAF MP4**（`iso5` + `moof`，`mvhd` 时长为 0）容易触发 Omni 的 `invalid_request: Internal error encountered.`。本 Demo 在 edit / extend / upscale 前提交前会 remux 成 progressive；成功时可在 meta 看到 `source_remuxed: true`。
+- 线上 1.2 **续写**对偏长 progressive 源片仍常 Internal error（文档写任意长度；实测 25s/末 24s 失败、末 20s 成功）。本 Demo 会裁到最后 **20 秒**（`source_trimmed: true`）。
 
 更完整的模型能力表、提示词模式、以及本 Demo 未覆盖的 API，见 [learning_guide.md](./learning_guide.md)。

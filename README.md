@@ -94,5 +94,6 @@ Optional: `REGION`, `SERVICE`, `OMNI_MODEL`, `ALLOW_UNAUTHENTICATED=false`. The 
 - After upscale, Edit / Extend must re-send `gs://`.
 - Failed Omni interactions surface the API `errors` text in the job message.
 - Stock / CMAF **fragmented MP4** inputs (`iso5` + `moof`, `mvhd.duration=0`) often make Omni return `invalid_request: Internal error encountered.` Edit / extend / upscale remux those to progressive faststart before submit; job meta may show `source_remuxed: true`.
+- Live Omni 1.2 **extend** also Internal-errors on progressive sources that are too long (docs still say any length; measured fail at 25s / last-24s, success at last-20s). This demo trims to the last **20s** (`source_trimmed: true`).
 
 See [learning_guide.md](./learning_guide.md) for the full task matrix.
