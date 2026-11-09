@@ -195,6 +195,41 @@ class PayloadTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             normalize_labels({"Bad Key": "x"})
 
+    def test_fragmented_mp4_needs_remux(self):
+        from app.gcs_util import mp4_is_fragmented, mp4_needs_remux, mvhd_duration_sec
+
+        # Minimal fMP4-shaped head: mvhd duration 0 + mvex + moof.
+        head = (
+            b"\x00\x00\x00\x18ftypiso5\x00\x00\x02\x00iso5"
+            + b"\x00\x00\x00\x6cmvhd"
+            + b"\x00"  # version
+            + b"\x00\x00\x00"  # flags
+            + b"\x00" * 8  # creation/modification
+            + b"\x00\x00\x03\xe8"  # timescale 1000
+            + b"\x00\x00\x00\x00"  # duration 0
+            + b"\x00" * 76
+            + b"\x00\x00\x00\x08mvex"
+            + b"\x00\x00\x00\x08moof"
+        )
+        self.assertIsNone(mvhd_duration_sec(head))
+        self.assertTrue(mp4_is_fragmented(head))
+        self.assertTrue(mp4_needs_remux(head))
+
+        # Progressive: non-zero mvhd duration, no fragments.
+        progressive = (
+            b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isom"
+            + b"\x00\x00\x00\x6cmvhd"
+            + b"\x00"
+            + b"\x00\x00\x00"
+            + b"\x00" * 8
+            + b"\x00\x00\x03\xe8"
+            + b"\x00\x00\x27\x10"  # duration 10000 @ 1000 = 10s
+            + b"\x00" * 76
+        )
+        self.assertAlmostEqual(mvhd_duration_sec(progressive) or 0, 10.0)
+        self.assertFalse(mp4_is_fragmented(progressive))
+        self.assertFalse(mp4_needs_remux(progressive))
+
 
 class ApiTests(unittest.TestCase):
     @classmethod

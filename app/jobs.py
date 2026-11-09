@@ -15,6 +15,7 @@ from app.model_catalog import ModelProfile, profile_for
 from app.gcs_util import (
     mvhd_duration_sec,
     build_input_object_uri,
+    ensure_omni_source_mp4,
     guess_ext,
     probe_video_duration,
     save_bytes_locally,
@@ -523,7 +524,26 @@ async def run_generation_job(
                 )
 
             source_seconds = None
-            if source_video_uri and source_video_uri.startswith("gs://"):
+            # Edit/extend/upscale need a progressive MP4. Stock CMAF/fMP4 downloads
+            # often have mvhd.duration=0 and trigger Omni "Internal error".
+            if (
+                source_video_uri
+                and source_video_uri.startswith("gs://")
+                and not chain_id
+            ):
+                job.touch(
+                    JobStatus.submitting,
+                    "Checking source clip (remux fragmented MP4 if needed)…",
+                )
+                source_video_uri, source_seconds, remux_meta = await asyncio.to_thread(
+                    ensure_omni_source_mp4,
+                    source_video_uri,
+                    job_id=job.id,
+                )
+                job.source_video_uri = source_video_uri
+                job.meta.update(remux_meta)
+                job.meta["source_duration_sec"] = source_seconds
+            elif source_video_uri and source_video_uri.startswith("gs://"):
                 job.touch(JobStatus.submitting, "Checking source clip length…")
                 source_seconds = await asyncio.to_thread(
                     probe_video_duration, source_video_uri

@@ -209,6 +209,8 @@ Veo 的 reference 还有 `asset` / `style` 类型且张数更少；Omni 走 Inte
 
 提示词应写 **片尾之后** 的动作/运镜/环境变化，不要把原片再描述一遍，也不要新开无关场景或第二个主角。
 
+**源片容器**：素材站下载的 MP4 经常是 **fragmented / CMAF（iso5 + moof）**，`mvhd` 时长为 0。Omni 对此常返回含糊的 `invalid_request: Internal error encountered.`，本 Demo 的 `source_duration_sec` 也会显示 `0`。提交 edit/extend/upscale 前会自动 remux 成 progressive MP4（真实时长 + faststart）再送给 Omni。
+
 ---
 
 ## 4. `response_format` 对照表（务必按 task 裁剪）

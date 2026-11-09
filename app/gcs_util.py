@@ -150,7 +150,11 @@ def stage_images_to_gcs(
 
 def mvhd_duration_sec(head: bytes) -> float | None:
     """Read the movie header's duration. Omni writes moov up front, so the
-    first few KB of the object are enough."""
+    first few KB of the object are enough.
+
+    Returns None when duration is missing or zero. Stock / CMAF downloads often
+    ship fragmented MP4s with mvhd.duration=0; those need a remux before Omni.
+    """
     import struct
 
     idx = head.find(b"mvhd")
@@ -164,13 +168,110 @@ def mvhd_duration_sec(head: bytes) -> float | None:
             timescale, duration = struct.unpack(">IQ", head[idx + 24 : idx + 36])
     except (struct.error, IndexError):
         return None
-    if not timescale:
+    if not timescale or duration <= 0:
         return None
     return duration / timescale
 
 
-def probe_video_duration(gcs_uri: str, *, head_bytes: int = 65536) -> float | None:
-    """Duration of a GCS MP4 in seconds, or None if it cannot be determined."""
+def mp4_is_fragmented(head: bytes) -> bool:
+    """True for fMP4 / CMAF-style files (mvex + moof, or empty sample tables)."""
+    sample = head[: min(len(head), 2_000_000)]
+    if b"mvex" in sample and b"moof" in sample:
+        return True
+    # Empty stts entry_count next to an mvex is another fragmented tell.
+    if b"mvex" in sample:
+        stts = sample.find(b"stts")
+        if stts >= 0 and stts + 12 <= len(sample):
+            entry_count = int.from_bytes(sample[stts + 8 : stts + 12], "big")
+            if entry_count == 0:
+                return True
+    return False
+
+
+def mp4_needs_remux(head: bytes) -> bool:
+    """Whether Omni is likely to choke on this container as an edit/extend source."""
+    if mp4_is_fragmented(head):
+        return True
+    return mvhd_duration_sec(head) is None and head.find(b"mvhd") >= 0
+
+
+def remux_to_progressive_mp4(src: Path, dst: Path) -> None:
+    """Lossless remux to a progressive MP4 with a real mvhd duration + faststart."""
+    import subprocess
+
+    import imageio_ffmpeg
+
+    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    proc = subprocess.run(
+        [
+            ffmpeg,
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(src),
+            "-c",
+            "copy",
+            "-movflags",
+            "+faststart",
+            str(dst),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0 or not dst.is_file() or dst.stat().st_size < 32:
+        raise OmniAPIError(
+            "Failed to remux source video into a progressive MP4 for Omni. "
+            f"ffmpeg: {(proc.stderr or proc.stdout or '')[:800]}"
+        )
+
+
+def ensure_omni_source_mp4(
+    gcs_uri: str,
+    *,
+    job_id: str,
+) -> tuple[str, float | None, dict[str, Any]]:
+    """Return a progressive gs:// source Omni can ingest for edit/extend/upscale.
+
+    Fragmented stock MP4s (iso5/CMAF) often report duration 0 and trigger an opaque
+    Omni ``invalid_request: Internal error encountered.`` Remux those once.
+    """
+    meta: dict[str, Any] = {
+        "source_video_uri_original": gcs_uri,
+        "source_remuxed": False,
+    }
+    head = _download_gcs_head(gcs_uri, head_bytes=256 * 1024)
+    duration = mvhd_duration_sec(head) if head else None
+    needs = bool(head) and mp4_needs_remux(head)
+    if not needs and duration is not None:
+        meta["source_duration_sec"] = duration
+        return gcs_uri, duration, meta
+    if not needs and duration is None:
+        # Unknown container; still try the URI as-is.
+        return gcs_uri, None, meta
+
+    local_dir = local_ref_dir(job_id)
+    raw_path = local_dir / "source_raw.mp4"
+    remux_path = local_dir / "source_progressive.mp4"
+    download_gcs_bytes(gcs_uri, dest=raw_path)
+    remux_to_progressive_mp4(raw_path, remux_path)
+    duration = mvhd_duration_sec(remux_path.read_bytes()[:65536])
+    out_uri = build_input_object_uri(job_id, 1, ".mp4", stem="source")
+    upload_local_file_to_gcs(remux_path, gcs_uri=out_uri, mime_type="video/mp4")
+    meta.update(
+        {
+            "source_remuxed": True,
+            "source_video_uri": out_uri,
+            "source_duration_sec": duration,
+            "source_remux_reason": "fragmented_mp4_or_zero_duration",
+        }
+    )
+    return out_uri, duration, meta
+
+
+def _download_gcs_head(gcs_uri: str, *, head_bytes: int = 65536) -> bytes | None:
     try:
         bucket, blob = parse_gcs_uri(gcs_uri)
     except ValueError:
@@ -191,9 +292,17 @@ def probe_video_duration(gcs_uri: str, *, head_bytes: int = 65536) -> float | No
         )
         if resp.status_code >= 400:
             return None
-        return mvhd_duration_sec(resp.content)
+        return resp.content
     except Exception:
         return None
+
+
+def probe_video_duration(gcs_uri: str, *, head_bytes: int = 65536) -> float | None:
+    """Duration of a GCS MP4 in seconds, or None if it cannot be determined."""
+    head = _download_gcs_head(gcs_uri, head_bytes=head_bytes)
+    if not head:
+        return None
+    return mvhd_duration_sec(head)
 
 
 def download_gcs_bytes(
