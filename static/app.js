@@ -16,6 +16,8 @@ const guideTask = document.getElementById("guideTask");
 const guideSteps = document.getElementById("guideSteps");
 const guideNote = document.getElementById("guideNote");
 const exampleChips = document.getElementById("exampleChips");
+const exampleRow = document.getElementById("exampleRow");
+const promptField = document.getElementById("promptField");
 const genTabs = document.getElementById("genTabs");
 const sourceBox = document.getElementById("sourceBox");
 const refsSection = document.getElementById("refsSection");
@@ -45,12 +47,156 @@ const suggestionsTitle = document.getElementById("suggestionsTitle");
 const comparison = document.getElementById("comparison");
 const comparisonGrid = document.getElementById("comparisonGrid");
 const comparisonHint = document.getElementById("comparisonHint");
+const modelSelect = document.getElementById("modelSelect");
+const customModelField = document.getElementById("customModelField");
+const customModelEl = document.getElementById("customModel");
+const modelNote = document.getElementById("modelNote");
+const seedEl = document.getElementById("seed");
+const labelsEl = document.getElementById("labels");
+const statefulEl = document.getElementById("stateful");
+const statefulField = document.getElementById("statefulField");
+const seedField = document.getElementById("seedField");
+const labelsField = document.getElementById("labelsField");
+const videoRefs = document.getElementById("videoRefs");
+const videoListEl = document.getElementById("videoList");
+const videoPicker = document.getElementById("videoPicker");
+const durationEl = document.getElementById("duration");
+const audioInputNote = document.getElementById("audioInputNote");
+
+let catalog = [];
+const videoPayloads = new WeakMap();
+const FALLBACK_12 = {
+  id: "gemini-omni-1.2-flash",
+  generate_min: 3,
+  generate_max: 15,
+  frames_max: 10,
+  edit_max: 15,
+  extend_min: 3,
+  extend_max: 10,
+  extend_input_max: null,
+  upscale_max: 15,
+  reference_videos_max: 3,
+  edit_reference_images_max: 2,
+  supports_seed: true,
+  supports_labels: true,
+  supports_multiturn: true,
+  supports_upscale: true,
+};
+
+function selectedModelId() {
+  if (modelSelect.value === "custom") return customModelEl.value.trim() || FALLBACK_12.id;
+  return modelSelect.value;
+}
+
+function activeProfile() {
+  const id = selectedModelId();
+  const known = catalog.find((item) => item.id === id);
+  if (known) return known;
+  if (id.includes("1.1")) {
+    return {
+      ...FALLBACK_12,
+      id,
+      generate_max: 10,
+      edit_max: 10,
+      upscale_max: null,
+      supports_upscale: false,
+      supports_seed: false,
+      supports_labels: false,
+      supports_multiturn: false,
+      edit_reference_images_max: 0,
+      extend_input_max: 30,
+    };
+  }
+  return { ...FALLBACK_12, id };
+}
+
+function fillDuration(min, max, preferred) {
+  const current = Number(durationEl.value || preferred || 8);
+  durationEl.innerHTML = "";
+  for (let n = min; n <= max; n += 1) {
+    const opt = document.createElement("option");
+    opt.value = String(n);
+    opt.textContent = `${n}s`;
+    durationEl.appendChild(opt);
+  }
+  const next = current >= min && current <= max ? current : preferred;
+  durationEl.value = String(next);
+}
+
+function applyDurationForMode() {
+  const profile = activeProfile();
+  if (currentMode === "extend") {
+    fillDuration(profile.extend_min, profile.extend_max, 8);
+  } else if (currentMode === "generate" && currentGenTask === "frames_to_video") {
+    fillDuration(profile.generate_min, Math.min(profile.generate_max, profile.frames_max), 8);
+  } else {
+    fillDuration(profile.generate_min, profile.generate_max, 8);
+  }
+}
+
+function applyCapabilityChrome() {
+  const profile = activeProfile();
+  customModelField.hidden = modelSelect.value !== "custom";
+  const upscaleBtn = document.querySelector('#modeTabs [data-mode="upscale"]');
+  if (upscaleBtn) {
+    upscaleBtn.disabled = !profile.supports_upscale;
+    upscaleBtn.title = profile.supports_upscale ? "" : "单独放大只在 Omni 1.2";
+  }
+  seedField.hidden = !profile.supports_seed;
+  labelsField.hidden = !profile.supports_labels;
+  const chainable = profile.supports_multiturn && currentMode !== "generate" && currentMode !== "upscale";
+  statefulField.hidden = !chainable;
+  modelNote.textContent = profile.supports_multiturn
+    ? "1.2 为正式版：生成和编辑 3–15 秒（首尾帧仍是 3–10 秒），可多轮改同一条 Interaction，并可把不超过 15 秒的成片放大。"
+    : "1.1 Preview：生成和编辑最长 10 秒。每次编辑都重传 gs:// 成片。放大、seed、labels 和多轮 interaction 请改用 1.2。";
+  if (audioInputNote) audioInputNote.hidden = currentMode !== "generate";
+}
+
+function parseLabels(text) {
+  const labels = {};
+  for (const part of text.split(",")) {
+    const piece = part.trim();
+    if (!piece) continue;
+    const eq = piece.indexOf("=");
+    if (eq <= 0) throw new Error("Labels 写成 key=value，多个用逗号隔开");
+    labels[piece.slice(0, eq).trim()] = piece.slice(eq + 1).trim();
+  }
+  return labels;
+}
+
+function requestExtras() {
+  const profile = activeProfile();
+  const body = { model: selectedModelId(), stateful: false };
+  if (profile.supports_seed && seedEl.value !== "") body.seed = Number(seedEl.value);
+  if (profile.supports_labels && labelsEl.value.trim()) body.labels = parseLabels(labelsEl.value);
+  if (profile.supports_multiturn) body.stateful = statefulEl.checked;
+  return body;
+}
 
 let pollTimer = null;
 let parseTimer = null;
 let lastFilledUrlsKey = "";
 let currentMode = "generate";
 let currentGenTask = "text_to_video";
+let serverExamples = null;
+
+function generateExamples(kind) {
+  return (serverExamples && serverExamples.generate && serverExamples.generate[kind]) || [];
+}
+
+function modeExamples(mode) {
+  const list = serverExamples && serverExamples[mode];
+  return Array.isArray(list) ? list : [];
+}
+
+async function ensureExamples() {
+  if (serverExamples) return serverExamples;
+  const res = await fetch("/api/examples");
+  if (!res.ok) throw new Error("示例列表加载失败");
+  serverExamples = await res.json();
+  renderExampleChips();
+  return serverExamples;
+}
 let selectedJob = null;
 const rowPayloads = new WeakMap();
 
@@ -117,7 +263,7 @@ const GEN_GUIDE = {
       "分镜里用 @图片1、@图片2 绑定角色。不要再用文字重写五官。",
       "提示词里若带 参考图：[\"https://…\"] 会自动填入列表。",
     ],
-    note: "服务端会把 @图片N 改成 Omni 的 <IMAGE_REF_N>。生成后可「重新生成」复用已上传的 GCS 图。",
+    note: "服务端会把 @图片N / @视频N 改成 <IMAGE_REF_N> / <VIDEO_REF_N>。参考视频不当源片剪辑，其中的声音会被忽略。",
     placeholder: "粘贴分镜；用 @图片1 绑定角色。也可在下方上传本地图。",
     promptLabel: "Prompt（分镜 + @图片N）",
     button: "Generate from references",
@@ -137,7 +283,7 @@ const MODE_GUIDE = {
       "指令要短：改光、去掉一个物体、换一件衣服。一次只改一件事。",
       "服务端会补上 Keep everything else the same.",
     ],
-    note: "源片必须 ≤10s。续写后的长片不能再 Edit。画幅与时长沿用源视频。",
+    note: "源片长度不能超过当前模型的编辑上限。1.2 可勾选多轮编辑，不必重传成片。不能改配音。",
     placeholder: "例：Make the lighting warmer. Keep everything else the same.",
     promptLabel: "Edit instruction（简短指令）",
     button: "Continue edit",
@@ -149,7 +295,7 @@ const MODE_GUIDE = {
       "填入已完成任务，或粘贴任意 gs:// 源视频。",
       "同样是短指令；与 Continue 调用同一接口，只是源视频填写方式不同。",
     ],
-    note: "不能改配音或台词。过长视频会报 Editing duration exceeds maximum duration 10。",
+    note: "不能改配音或台词。1.2 最长编辑 15 秒，并可附最多 2 张参考图。1.1 最长 10 秒。",
     placeholder: "例：Remove the tablet from her hands. Keep everything else the same.",
     promptLabel: "Edit instruction",
     button: "Edit video",
@@ -162,11 +308,24 @@ const MODE_GUIDE = {
       "Duration 是本次新增长度（3–10s）。返回的是拼接后的完整成片。",
       "例如 8s 源片再续 8s → 得到约 16s。",
     ],
-    note: "源片 1–30s，成片最长约 40s。超过 10s 后不能再 Edit，只能继续 Extend。",
+    note: "本次续写 3–10 秒，接在片尾，返回拼接后的成片。1.2 的长源片只会保留最后约 30 秒再拼接。",
     placeholder: "例：Continue as they watch the interface light up and smile.",
     promptLabel: "What happens next",
     button: "Extend video",
     enhance: "续写指令会略作镜头/节奏润色，不改人物和画风。",
+  },
+  upscale: {
+    title: "Upscale — 只提高分辨率",
+    task: "task=upscale",
+    steps: [
+      "选一条不超过 15 秒的成片，或粘贴 gs:// 源视频。",
+      "把 Resolution 选得比源片更高。官方建议先用 360p / 720p 出草稿，再放大到 1080p 或 4K。",
+      "不要写提示词。线上会拒绝任何文字：“Text input is not supported for upscale task.”",
+    ],
+    note: "只在 Omni 1.2。请求里只有源视频和目标分辨率，不能改内容、运镜或对白。这不是 Cloud Transcoder 的转码。",
+    placeholder: "",
+    promptLabel: "Prompt",
+    button: "Upscale video",
   },
 };
 
@@ -181,14 +340,15 @@ function setStatus(text) {
 
 function renderExampleChips() {
   exampleChips.innerHTML = "";
+  if (exampleRow) exampleRow.hidden = false;
   const items =
     currentMode === "generate"
-      ? (GEN_EXAMPLES[currentGenTask] || []).map((item, i) => ({
+      ? generateExamples(currentGenTask).map((item, i) => ({
           label: item.label,
           apply: () => applyGenerateExample(currentGenTask, i),
         }))
-      : (MODE_EXAMPLES[currentMode] || []).map((text, i) => ({
-          label: text.replace(/^Continue as /i, "").slice(0, 18),
+      : modeExamples(currentMode).map((text, i) => ({
+          label: String(text).replace(/^Continue as /i, "").slice(0, 18),
           apply: () => applyModeExample(currentMode, i),
         }));
   for (const item of items) {
@@ -204,6 +364,7 @@ function renderExampleChips() {
     });
     exampleChips.appendChild(btn);
   }
+  if (exampleRow) exampleRow.hidden = items.length === 0;
 }
 
 function applyGuide() {
@@ -267,10 +428,92 @@ function setGenTask(kind) {
     filePicker.multiple = g.slots === "n" || g.slots === 2;
     syncImageSlots();
   }
+  const showVideos =
+    isGenerate && kind === "reference_to_video" && activeProfile().reference_videos_max > 0;
+  videoRefs.hidden = !showVideos;
   applyGuide();
+  applyDurationForMode();
+  applyCapabilityChrome();
+}
+
+const MODE_STARTER = {
+  continue: "Make the lighting warmer. Keep everything else the same.",
+  edit: "A slow push-in. Keep everything else the same.",
+  extend: "Continue as the camera slowly pulls back on the same scene.",
+  upscale: "",
+};
+const draftPrompt = {};
+const draftResolution = {};
+const draftDuration = {};
+const imageStash = {};
+
+function imageStashKey(mode) {
+  if (mode === "generate") return "generate";
+  if (mode === "continue" || mode === "edit" || mode === "extend") return "followup";
+  return null;
+}
+
+function stashImages(key) {
+  const frag = document.createDocumentFragment();
+  while (imageListEl.firstChild) frag.appendChild(imageListEl.firstChild);
+  imageStash[key] = frag;
+}
+
+function restoreImages(key) {
+  imageListEl.replaceChildren();
+  const frag = imageStash[key];
+  if (frag) imageListEl.appendChild(frag);
+}
+
+function rememberPrompt(mode) {
+  if (!mode) return;
+  if (mode !== "upscale") draftPrompt[mode] = promptEl.value;
+  draftResolution[mode] = document.getElementById("resolution").value;
+  draftDuration[mode] = durationEl.value;
+}
+
+function restorePrompt(mode) {
+  if (mode === "upscale") {
+    promptEl.value = "";
+  } else if (typeof draftPrompt[mode] === "string") {
+    promptEl.value = draftPrompt[mode];
+    if (!promptEl.value.trim() && MODE_STARTER[mode]) promptEl.value = MODE_STARTER[mode];
+  } else {
+    promptEl.value = MODE_STARTER[mode] || "";
+  }
+  const resolution = draftResolution[mode];
+  const resolutionEl = document.getElementById("resolution");
+  if (resolution && [...resolutionEl.options].some((opt) => opt.value === resolution)) {
+    resolutionEl.value = resolution;
+  }
+  const duration = draftDuration[mode];
+  if (duration && [...durationEl.options].some((opt) => opt.value === duration)) {
+    durationEl.value = duration;
+  }
+}
+
+function raiseLowUpscaleResolution() {
+  const resolution = document.getElementById("resolution");
+  if (resolution.value === "360p" || resolution.value === "720p") {
+    resolution.value = "1080p";
+  }
 }
 
 function setMode(mode) {
+  if (mode === "upscale" && !activeProfile().supports_upscale) {
+    mode = "generate";
+    setStatus("当前模型没有单独放大，已回到 Generate。");
+  }
+  const previousMode = currentMode;
+  const switching = previousMode !== mode;
+  if (switching) {
+    rememberPrompt(previousMode);
+    const fromKey = imageStashKey(previousMode);
+    const toKey = imageStashKey(mode);
+    if (fromKey && fromKey !== toKey) stashImages(fromKey);
+    if (toKey && fromKey !== toKey) restoreImages(toKey);
+    if (!toKey) imageListEl.replaceChildren();
+  }
   currentMode = mode;
   document.querySelectorAll("#modeTabs .mode-tab").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.mode === mode);
@@ -280,18 +523,37 @@ function setMode(mode) {
   sourceBox.hidden = isGenerate;
   sourceVideoField.hidden = isGenerate;
   audioToggles.hidden = !isGenerate;
-  durationField.hidden = mode === "continue" || mode === "edit";
+  durationField.hidden = mode === "continue" || mode === "edit" || mode === "upscale";
   resolutionField.hidden = mode === "extend";
   aspectField.hidden = !isGenerate;
+  if (promptField) promptField.hidden = mode === "upscale";
   enhanceToggle.hidden = !(isGenerate || mode === "extend");
 
   if (isGenerate) {
     setGenTask(currentGenTask);
   } else {
     genTabs.hidden = true;
-    refsSection.hidden = true;
+    videoRefs.hidden = true;
+    const editRefs =
+      activeProfile().edit_reference_images_max > 0 && mode !== "upscale";
+    refsSection.hidden = !editRefs;
     testGcsBtn.hidden = true;
+    addImageBtn.hidden = !editRefs;
+    uploadImagesBtn.hidden = !editRefs;
+    if (editRefs) {
+      refsTitle.textContent = "可选参考图";
+      refsHint.textContent = `最多 ${activeProfile().edit_reference_images_max} 张，可选。只有指令里写了 @图片1 才会上传；公网地址由服务端下载。`;
+      filePicker.multiple = true;
+      if (!imageListEl.children.length) addImageRow({ label: "@图片1" });
+    }
     applyGuide();
+    applyDurationForMode();
+    applyCapabilityChrome();
+  }
+  if (switching) {
+    restorePrompt(mode);
+    if (!isGenerate && selectedJob && selectedJob.video_uri) applySourceJob(selectedJob);
+    if (mode === "upscale") raiseLowUpscaleResolution();
   }
 }
 
@@ -601,9 +863,14 @@ async function loadHealth() {
   try {
     const res = await fetch("/api/health");
     const data = await res.json();
+    catalog = data.models || [];
+    if (data.model && [...modelSelect.options].some((opt) => opt.value === data.model)) {
+      modelSelect.value = data.model;
+    }
+    setMode(currentMode);
     if (data.project_configured) {
       const proxy = data.active_proxy ? " · proxy on" : " · no proxy";
-      healthEl.textContent = `GCP ready · ${data.model}${proxy}`;
+      healthEl.textContent = `GCP ready · ${selectedModelId()}${proxy}`;
       healthEl.className = "health ok";
     } else {
       healthEl.textContent = "Set GOOGLE_CLOUD_PROJECT in .env";
@@ -615,100 +882,7 @@ async function loadHealth() {
   }
 }
 
-// Each click cycles to the next sample so a walkthrough can show the range of
-// instructions a mode handles, rather than the same line every time.
-const MODE_EXAMPLES = {
-  continue: [
-    "Make the lighting warmer, like golden hour.",
-    "Change the background to a snowy street at night.",
-    "Remove the text on the screen.",
-    "Make the camera slowly push in on her face.",
-  ],
-  edit: [
-    "Remove the coffee cup from the table.",
-    "Change her jacket to bright red.",
-    "Make it rain lightly outside the window.",
-    "Replace the daylight with neon-lit night lighting.",
-  ],
-  extend: [
-    "Continue as the camera slowly pulls back to reveal the whole room.",
-    "Continue as she turns toward the window and smiles.",
-    "Continue as the lights dim and the screen powers down.",
-    "Continue as he stands up and walks out of the frame.",
-  ],
-};
-const exampleCursor = { continue: 0, edit: 0, extend: 0, generate: 0 };
-
-const GEN_EXAMPLES = {
-  text_to_video: [
-    {
-      label: "庭院灯笼",
-      prompt:
-        "16:9 cinematic, dusk, illustrated look\nA red paper lantern lifts off a wooden table in a quiet courtyard. Wide shot, 24mm, slow tilt up as it rises and spins. Warm lantern light, cool blue sky. No people.\nNo dialogue. No burned-in subtitles. No background music.",
-    },
-    {
-      label: "竖屏夜市",
-      prompt:
-        "9:16 handheld documentary\nA street-food stall at night. Steam rises from a wok. The cook flips noodles in one continuous motion. Neon signs bokeh in the background.\nNo spoken lines. Diegetic sizzle only. No burned-in subtitles.",
-      aspect_ratio: "9:16",
-    },
-    {
-      label: "微距水滴",
-      prompt:
-        "16:9 macro, 8 seconds\nA single water droplet hangs from a leaf tip, then falls in slow motion and ripples a dark pond. Shallow depth of field, f/1.8, 100mm.\nSilence except a soft splash. No text on screen.",
-    },
-  ],
-  image_to_video: [
-    {
-      label: "从静帧推进",
-      prompt:
-        "Use this image as the first frame.\nThe camera slowly pushes in. A light breeze moves foliage. Keep the original lighting and composition; only add natural motion.\nNo dialogue. No burned-in subtitles. No background music.",
-      image_urls: ["https://www.gstatic.com/webp/gallery/1.jpg"],
-    },
-    {
-      label: "天气变化",
-      prompt:
-        "Start from this exact frame.\nOver 8 seconds the light cools and a light rain begins. Gentle handheld drift. Do not change the subject or crop.\nDiegetic rain only. No speech.",
-      image_urls: ["https://www.gstatic.com/webp/gallery/2.jpg"],
-    },
-  ],
-  frames_to_video: [
-    {
-      label: "两帧运镜",
-      prompt:
-        "Start on the first image and end on the second image.\nA smooth 8-second camera move interpolates between them: slow dolly plus a slight pan. Keep lighting consistent.\nNo dialogue. No burned-in subtitles.",
-      image_urls: [
-        "https://www.gstatic.com/webp/gallery/1.jpg",
-        "https://www.gstatic.com/webp/gallery/4.jpg",
-      ],
-    },
-    {
-      label: "首尾循环",
-      prompt:
-        "First image is frame 0, second image is the last frame.\nOrbit slowly around the subject so the end pose matches the last still. Motion should feel like one shot, not a cut.\nNo speech. No on-screen text.",
-      image_urls: [
-        "https://www.gstatic.com/webp/gallery/2.jpg",
-        "https://www.gstatic.com/webp/gallery/1.jpg",
-      ],
-    },
-  ],
-  reference_to_video: [
-    {
-      label: "角色锁定分镜",
-      prompt: "",
-      fetch: true,
-    },
-    {
-      label: "双人仰望",
-      prompt:
-        "16:9, illustrated look\nCharacter: traveler @图片1\nCompanion: small fox @图片2\nShot 1, 0-8s, medium, 50mm. @图片1 kneels and @图片2 steps closer. They both look up as a lantern rises out of frame.\nThe traveler says: What is it looking for?\nNo burned-in subtitles. No background music.",
-      image_urls: [
-        "https://www.gstatic.com/webp/gallery/1.jpg",
-        "https://www.gstatic.com/webp/gallery/2.jpg",
-      ],
-    },
-  ],
-};
+const exampleCursor = { continue: 0, edit: 0, extend: 0, upscale: 0, generate: 0 };
 
 async function pickSourceJob({ maxSeconds }) {
   const res = await fetch("/api/jobs");
@@ -722,23 +896,11 @@ async function pickSourceJob({ maxSeconds }) {
 }
 
 async function applyGenerateExample(kind, index) {
+  await ensureExamples();
   setMode("generate");
   setGenTask(kind);
-  let item = (GEN_EXAMPLES[kind] || [])[index];
+  const item = generateExamples(kind)[index];
   if (!item) return;
-  const chipLabel = item.label;
-  if (item.fetch) {
-    const res = await fetch("/api/example");
-    const data = await res.json();
-    item = {
-      label: chipLabel,
-      prompt: data.prompt,
-      image_urls: data.image_urls,
-      duration: data.duration,
-      resolution: data.resolution,
-      aspect_ratio: data.aspect_ratio,
-    };
-  }
   promptEl.value = item.prompt || "";
   if (item.duration) document.getElementById("duration").value = String(item.duration);
   if (item.aspect_ratio) document.getElementById("aspectRatio").value = item.aspect_ratio;
@@ -758,20 +920,43 @@ async function applyGenerateExample(kind, index) {
 }
 
 async function applyModeExample(mode, index) {
-  const samples = MODE_EXAMPLES[mode];
-  if (!samples) return;
+  await ensureExamples();
+  const samples = modeExamples(mode);
+  if (!samples.length) return;
   let text = samples[index % samples.length];
-  if (mode !== "extend" && !/keep everything else/i.test(text)) {
+  if (mode !== "extend" && mode !== "upscale" && !/keep everything else/i.test(text)) {
     text += " Keep everything else the same.";
   }
   promptEl.value = text;
+  draftPrompt[mode] = promptEl.value;
   if (mode === "extend") document.getElementById("duration").value = "8";
-  const maxSeconds = mode === "extend" ? 30 : 10;
+  const profile = activeProfile();
+  const maxSeconds =
+    mode === "extend"
+      ? profile.extend_input_max
+      : mode === "upscale"
+        ? profile.upscale_max
+        : profile.edit_max;
+  const currentUri = sourceVideoUriEl.value.trim();
+  const currentId = sourceJobIdEl.value.trim();
+  const currentTooLong =
+    maxSeconds != null &&
+    selectedJob &&
+    selectedJob.duration_sec != null &&
+    selectedJob.duration_sec > maxSeconds + 0.5 &&
+    (selectedJob.id === currentId || selectedJob.video_uri === currentUri);
+  if (currentTooLong) {
+    setStatus(`示例已填入。当前源片 ${selectedJob.duration_sec}s 超过 ${maxSeconds}s，请换一条更短的成片。`);
+    return;
+  }
+  if (currentUri.startsWith("gs://") || currentId) {
+    setStatus("示例指令已填入，沿用当前源视频。");
+    return;
+  }
   const source = await pickSourceJob({ maxSeconds });
   if (!source) {
-    setStatus(
-      `示例指令已填入。请先 Generate 一条 ${maxSeconds}s 以内的片子，再选择源视频。`
-    );
+    const limit = maxSeconds == null ? "任意长度" : `${maxSeconds}s 以内`;
+    setStatus(`示例指令已填入。请先 Generate 一条${limit}的片子，再选择源视频。`);
     return;
   }
   applySourceJob(source);
@@ -779,8 +964,13 @@ async function applyModeExample(mode, index) {
 }
 
 async function loadGenerateExample() {
-  const list = GEN_EXAMPLES[currentGenTask] || [];
-  const idx = (exampleCursor.generate || 0) % Math.max(list.length, 1);
+  await ensureExamples();
+  const list = generateExamples(currentGenTask);
+  if (!list.length) {
+    setStatus("这个能力还没有示例");
+    return;
+  }
+  const idx = (exampleCursor.generate || 0) % list.length;
   exampleCursor.generate = idx + 1;
   await applyGenerateExample(currentGenTask, idx);
 }
@@ -790,7 +980,12 @@ async function loadExample() {
     await loadGenerateExample();
     return;
   }
-  const samples = MODE_EXAMPLES[currentMode];
+  await ensureExamples();
+  const samples = modeExamples(currentMode);
+  if (!samples.length) {
+    setStatus("这个能力不使用提示词示例");
+    return;
+  }
   const idx = exampleCursor[currentMode] % samples.length;
   exampleCursor[currentMode] += 1;
   await applyModeExample(currentMode, idx);
@@ -809,12 +1004,13 @@ function clearVideo() {
   stageEmpty.hidden = false;
 }
 
-const MODE_CHIP = { edit: "Edit", extend: "Extend" };
+const MODE_CHIP = { edit: "Edit", extend: "Extend", upscale: "Upscale" };
 
 function applySuggestion(job, suggestion) {
   applySourceJob(job);
   setMode(suggestion.mode);
   promptEl.value = suggestion.instruction;
+  draftPrompt[suggestion.mode] = suggestion.instruction;
   promptEl.focus();
   setStatus(
     `已采用建议：${suggestion.label}。源视频取自 job ${job.id}，点「${
@@ -857,9 +1053,10 @@ async function renderSuggestions(job) {
     suggestionBubbles.appendChild(bubble);
   }
 
+  const editMax = job.edit_max_sec || activeProfile().edit_max;
   suggestionsTitle.textContent =
-    job.duration_sec > 10
-      ? `下一步试试（当前 ${job.duration_sec}s，超过 10s 只能续写）`
+    job.duration_sec > editMax
+      ? `下一步试试（当前 ${job.duration_sec}s，超过 ${editMax}s 只能续写）`
       : "下一步试试（点击即可填入指令与源视频）";
   suggestions.hidden = false;
 }
@@ -869,10 +1066,11 @@ const CLIP_LABEL = {
   text_to_video: "文生视频",
   image_to_video: "首帧",
   frames_to_video: "首尾帧",
-  reference_to_video: "参考图",
+  reference_to_video: "参考",
   continue: "继续编辑",
   edit: "编辑",
   extend: "续写",
+  upscale: "放大",
 };
 
 function comparisonPlayers() {
@@ -1011,15 +1209,23 @@ function renderJob(job) {
       : "复用该任务已上传到 GCS 的图片，不再重新上传"
     : "该任务没有可复用的图片或分镜";
 
-  // Edit rejects anything longer than 10s; Extend still accepts up to 30s.
-  const tooLongToEdit = job.duration_sec > 10;
+  const editMax = job.edit_max_sec || activeProfile().edit_max;
+  const tooLongToEdit = job.duration_sec != null && job.duration_sec > editMax + 0.5;
   for (const id of ["useForContinue", "useForEdit"]) {
     const btn = document.getElementById(id);
     btn.disabled = tooLongToEdit;
     btn.title = tooLongToEdit
-      ? `源视频 ${job.duration_sec}s 超过 Edit 的 10s 上限，请改用 Extend 或选择更短的片段`
+      ? `源视频 ${job.duration_sec}s 超过 Edit 的 ${editMax}s 上限，请改用 Extend 或选择更短的片段`
       : "";
   }
+  const upscaleBtn = document.getElementById("useForUpscale");
+  const canUpscale =
+    activeProfile().supports_upscale &&
+    (job.duration_sec == null || job.duration_sec <= 15.5);
+  upscaleBtn.disabled = !canUpscale;
+  upscaleBtn.title = canUpscale
+    ? "用 Omni 1.2 的 task=upscale 提高到更高分辨率。不能写提示词，也不能改内容"
+    : "放大要求源片不超过 15 秒";
 
   if (job.status === "completed" && job.video_url) {
     showVideo(job.video_url);
@@ -1089,47 +1295,35 @@ function startPolling(jobId) {
   }, 2500);
 }
 
-async function blobToBase64(blob) {
-  const buffer = await blob.arrayBuffer();
-  const bytes = new Uint8Array(buffer);
-  let binary = "";
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-  }
-  return btoa(binary);
-}
-
-async function collectRowImages() {
-  const images = [];
-  const errors = [];
-  const rows = [...imageListEl.children];
-  for (let i = 0; i < rows.length; i++) {
-    const row = rows[i];
+function collectImageRefs() {
+  const refs = [];
+  for (const row of [...imageListEl.children]) {
     const stored = rowPayloads.get(row);
     if (stored?.data) {
-      images.push({ mime_type: stored.mime_type, data: stored.data });
+      refs.push({ mime_type: stored.mime_type || "image/png", data: stored.data });
       continue;
     }
     const url = row.querySelector('input[type="url"]')?.value.trim();
     if (!url) continue;
-    setStatus(`正在读取图片 ${i + 1}/${rows.length}…`);
-    try {
-      const res = await fetch(url, { mode: "cors", cache: "force-cache" });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const blob = await res.blob();
-      let mime = blob.type || "";
-      if (!mime || mime === "application/octet-stream") {
-        if (url.toLowerCase().includes(".png")) mime = "image/png";
-        else if (url.toLowerCase().match(/\.jpe?g/)) mime = "image/jpeg";
-        else mime = "image/png";
-      }
-      images.push({ mime_type: mime, data: await blobToBase64(blob) });
-    } catch (err) {
-      errors.push(`图${i + 1}: ${err.message || err}`);
+    if (!/^https?:\/\//i.test(url)) {
+      throw new Error("参考图请上传文件，或粘贴 http(s) 地址");
     }
+    refs.push({ url, mime_type: mimeFromUrl(url) });
   }
-  return { images, errors };
+  return refs;
+}
+
+function promptCitesImages(text) {
+  return /@图片\s*\d|@image\s*\d/i.test(text || "");
+}
+
+function mimeFromUrl(url) {
+  const lower = url.toLowerCase();
+  if (lower.includes(".png")) return "image/png";
+  if (lower.match(/\.jpe?g/)) return "image/jpeg";
+  if (lower.includes(".webp")) return "image/webp";
+  if (lower.includes(".gif")) return "image/gif";
+  return "image/jpeg";
 }
 
 async function prepareGenerateInput() {
@@ -1142,18 +1336,22 @@ async function prepareGenerateInput() {
     return { prompt, referenceImages: [] };
   }
 
-  const { images, errors } = await collectRowImages();
+  const images = collectImageRefs();
+  const hasVideo = [...videoListEl.children].some((row) => {
+    const stored = videoPayloads.get(row);
+    const uri = row.querySelector("input")?.value.trim();
+    return Boolean(stored?.file || uri);
+  });
   const need = currentGenTask === "frames_to_video" ? 2 : 1;
+  if (currentGenTask === "reference_to_video" && images.length === 0 && hasVideo) {
+    return { prompt, referenceImages: [] };
+  }
   if (images.length < need) {
-    const detail = errors.length ? `（${errors.join("; ")}）` : "";
     throw new Error(
       currentGenTask === "frames_to_video"
-        ? `首尾帧需要两张图，可本地上传或粘贴 URL${detail}`
-        : `请上传或粘贴至少一张图${detail}`
+        ? "首尾帧需要两张图，可本地上传或粘贴 URL"
+        : "请上传或粘贴至少一张图"
     );
-  }
-  if (errors.length) {
-    setStatus(`已读取 ${images.length} 张，其余失败：${errors.join("; ")}`);
   }
   return { prompt, referenceImages: images };
 }
@@ -1213,6 +1411,7 @@ async function regenerateFromJob(job) {
     mode: "generate",
     generate_task: kind,
     reuse_job_id: job.id,
+    ...requestExtras(),
     duration: Number(document.getElementById("duration").value),
     resolution: document.getElementById("resolution").value,
     aspect_ratio: document.getElementById("aspectRatio").value,
@@ -1241,9 +1440,61 @@ async function regenerateFromJob(job) {
   startPolling(created.id);
 }
 
+function addVideoRow({ uri = "", file = null } = {}) {
+  const row = document.createElement("div");
+  row.className = "image-row";
+  const label = document.createElement("div");
+  label.className = "idx";
+  label.textContent = `视频 ${videoListEl.children.length + 1}`;
+  const input = document.createElement("input");
+  input.type = "text";
+  input.placeholder = "gs://bucket/clip.mp4，或用 Upload clips";
+  input.value = uri;
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "ghost";
+  remove.textContent = "移除";
+  remove.addEventListener("click", () => {
+    videoPayloads.delete(row);
+    row.remove();
+  });
+  if (file) {
+    input.value = file.name;
+    input.readOnly = true;
+    videoPayloads.set(row, { file });
+  }
+  row.append(label, input, remove);
+  videoListEl.appendChild(row);
+  return row;
+}
+
+async function collectReferenceVideos() {
+  const videos = [];
+  const rows = [...videoListEl.children];
+  if (rows.length > 3) throw new Error("参考视频最多 3 段");
+  for (const row of rows) {
+    const stored = videoPayloads.get(row);
+    if (stored?.file) {
+      const data = await fileToPayload(stored.file);
+      videos.push({
+        mime_type: stored.file.type || "video/mp4",
+        data: data.data,
+      });
+      continue;
+    }
+    const uri = row.querySelector("input")?.value.trim() || "";
+    if (!uri) continue;
+    if (!uri.startsWith("gs://")) {
+      throw new Error("参考视频请上传文件，或粘贴 gs:// 地址");
+    }
+    videos.push({ mime_type: "video/mp4", uri });
+  }
+  return videos;
+}
+
 async function submitJob() {
   const prompt = promptEl.value.trim();
-  if (!prompt) {
+  if (!prompt && currentMode !== "upscale") {
     setStatus("请填写提示词 / 编辑指令");
     return;
   }
@@ -1256,9 +1507,9 @@ async function submitJob() {
 
   try {
     const base = {
-      prompt,
+      prompt: currentMode === "upscale" ? "" : prompt,
       mode: currentMode,
-      duration: Number(document.getElementById("duration").value),
+      duration: Number(durationEl.value),
       resolution: document.getElementById("resolution").value,
       aspect_ratio: document.getElementById("aspectRatio").value,
       generate_audio: document.getElementById("generateAudio").checked,
@@ -1266,19 +1517,47 @@ async function submitJob() {
       no_bgm: document.getElementById("noBgm").checked,
       image_urls: [],
       reference_images: [],
+      reference_videos: [],
       enhance_prompt: enhancePromptEl.checked,
       generate_task: currentMode === "generate" ? currentGenTask : undefined,
+      ...requestExtras(),
     };
 
     if (currentMode === "generate") {
       const prepared = await prepareGenerateInput();
       base.prompt = prepared.prompt || prompt;
       base.reference_images = prepared.referenceImages;
+      if (currentGenTask === "reference_to_video") {
+        base.reference_videos = await collectReferenceVideos();
+      }
       const n = base.reference_images.length;
+      const v = base.reference_videos.length;
       setStatus(
-        n
-          ? `Submitting ${currentGenTask}… (${n} image(s) → GCS → Omni)`
+        n || v
+          ? `Submitting ${currentGenTask}… (${n} image(s), ${v} video(s) → GCS → Omni)`
           : `Submitting ${currentGenTask}…`
+      );
+    } else if (currentMode !== "upscale" && activeProfile().edit_reference_images_max > 0) {
+      const listed = collectImageRefs();
+      const cites = promptCitesImages(base.prompt);
+      const images = cites ? listed : [];
+      if (cites && !images.length) {
+        throw new Error("指令写了 @图片，请在下面放上对应的参考图");
+      }
+      const cap = activeProfile().edit_reference_images_max;
+      if (images.length > cap) throw new Error(`这次最多 ${cap} 张参考图`);
+      base.reference_images = images;
+      base.source_job_id = sourceJobIdEl.value.trim() || null;
+      base.source_video_uri = sourceVideoUriEl.value.trim() || null;
+      if (!base.source_video_uri && !base.source_job_id) {
+        throw new Error(`${currentMode} 需要提供 gs:// 源视频，或选择一条已完成的任务`);
+      }
+      setStatus(
+        !cites && listed.length
+          ? `Submitting ${currentMode}… 指令没有 @图片，参考图不上传。`
+          : images.length
+            ? `Submitting ${currentMode}… 参考图由服务端下载。`
+            : `Submitting ${currentMode}…`
       );
     } else {
       base.source_job_id = sourceJobIdEl.value.trim() || null;
@@ -1344,26 +1623,40 @@ document.getElementById("regenBtn").addEventListener("click", () => {
 document.getElementById("useForContinue").addEventListener("click", () => {
   if (selectedJob) applySourceJob(selectedJob);
   setMode("continue");
-  if (!promptEl.value.trim()) {
-    promptEl.value = "Make the lighting warmer. Keep everything else the same.";
-  }
-  setStatus("已填入源视频 URI，请填写修改指令后提交 Continue edit");
+  setStatus("已填入当前成片。确认编辑指令后提交 Continue edit。");
 });
 document.getElementById("useForEdit").addEventListener("click", () => {
   if (selectedJob) applySourceJob(selectedJob);
   setMode("edit");
-  if (!promptEl.value.trim()) {
-    promptEl.value = "Remove the glowing tablet. Keep everything else the same.";
-  }
-  setStatus("已填入源视频 URI，请填写修改说明后提交 Edit video");
+  setStatus("已填入当前成片。确认编辑指令后提交 Edit video。");
 });
 document.getElementById("useForExtend").addEventListener("click", () => {
   if (selectedJob) applySourceJob(selectedJob);
   setMode("extend");
-  if (!promptEl.value.trim()) {
-    promptEl.value = "Continue as they smile and the interface finishes upgrading.";
+  setStatus("已填入当前成片。Duration 是这次续写的秒数，确认后提交 Extend。");
+});
+document.getElementById("useForUpscale").addEventListener("click", () => {
+  if (selectedJob) applySourceJob(selectedJob);
+  if (!activeProfile().supports_upscale) {
+    modelSelect.value = "gemini-omni-1.2-flash";
   }
-  setStatus("已填入源视频 URI，请描述后续画面内容后提交 Extend");
+  setMode("upscale");
+  setStatus("已填入当前成片。放大不接受文字，确认目标分辨率高于源片后提交。");
+});
+modelSelect.addEventListener("change", () => setMode(currentMode));
+customModelEl.addEventListener("change", () => setMode(currentMode));
+document.getElementById("addVideo").addEventListener("click", () => addVideoRow());
+document.getElementById("uploadVideos").addEventListener("click", () => videoPicker.click());
+videoPicker.addEventListener("change", () => {
+  const files = [...(videoPicker.files || [])];
+  for (const file of files) {
+    if (videoListEl.children.length >= 3) {
+      setStatus("参考视频最多 3 段");
+      break;
+    }
+    addVideoRow({ file });
+  }
+  videoPicker.value = "";
 });
 
 document.getElementById("addImage").addEventListener("click", () =>
@@ -1410,4 +1703,5 @@ promptEl.addEventListener("blur", () => {
 setMode("generate");
 setGenTask("text_to_video");
 loadHealth();
+ensureExamples().catch((err) => setStatus(String(err)));
 refreshJobList().catch(() => {});

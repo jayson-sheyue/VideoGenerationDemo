@@ -108,70 +108,73 @@ def interactions_url(project_id: str, interaction_id: str | None = None) -> str:
     return base
 
 
+def _media_item(kind: str, entry: dict[str, str]) -> dict[str, Any]:
+    item: dict[str, Any] = {
+        "type": kind,
+        "mime_type": entry.get("mime_type")
+        or ("video/mp4" if kind == "video" else "image/png"),
+    }
+    if entry.get("uri"):
+        item["uri"] = entry["uri"]
+    elif entry.get("data"):
+        item["data"] = entry["data"]
+    else:
+        raise OmniAPIError(f"{kind} entry needs either uri or data")
+    return item
+
+
 def build_payload(
     *,
     prompt: str,
     images: list[dict[str, str]] | None = None,
+    videos: list[dict[str, str]] | None = None,
     duration: str,
     resolution: str,
     aspect_ratio: str,
     task: str | None = None,
     video: dict[str, str] | None = None,
+    model: str | None = None,
+    seed: int | None = None,
+    labels: dict[str, str] | None = None,
+    store: bool | None = None,
+    background: bool | None = None,
+    previous_interaction_id: str | None = None,
 ) -> dict[str, Any]:
-    """Build an Interactions payload for text_to_video / image_to_video /
-    reference_to_video / edit / extend.
+    """Build an Interactions payload.
 
-    images: list of {"mime_type", "uri"|"data"} — first/last frames for
-    image_to_video, or character/scene refs for reference_to_video
-    video:  {"mime_type", "uri"} for edit / extend from a prior clip
+    images: {"mime_type", "uri"|"data"} — frames or references
+    videos: extra reference clips (not the edit/extend/upscale source)
+    video:  source clip for edit / extend / upscale
 
-    response_format is validated per task and the request is rejected outright
-    on a field the task does not accept (verified against the live API):
-      edit   — resolution only; geometry and length come from the source video
-      extend — duration only; aspect_ratio is rejected despite the docs listing it
+    response_format is trimmed per task. The live API rejects fields a task
+    does not accept:
+      edit / upscale — resolution only
+      extend — duration only (aspect_ratio is rejected despite some docs)
     """
     images = images or []
-    text_item: dict[str, Any] = {"type": "text", "text": prompt}
+    videos = videos or []
     input_items: list[dict[str, Any]] = []
 
-    if video:
-        v: dict[str, Any] = {
-            "type": "video",
-            "mime_type": video.get("mime_type") or "video/mp4",
-        }
-        if video.get("uri"):
-            v["uri"] = video["uri"]
-        elif video.get("data"):
-            v["data"] = video["data"]
-        else:
-            raise OmniAPIError("Video entry needs either uri or data")
-        input_items.append(v)
-
-    for img in images:
-        item: dict[str, Any] = {
-            "type": "image",
-            "mime_type": img["mime_type"],
-        }
-        if img.get("uri"):
-            item["uri"] = img["uri"]
-        elif img.get("data"):
-            item["data"] = img["data"]
-        else:
-            raise OmniAPIError("Image entry needs either uri or data")
-        input_items.append(item)
-
-    input_items.append(text_item)
-
     if not task:
-        if video:
+        if video or previous_interaction_id:
             task = "edit"
-        elif images:
+        elif images or videos:
             task = "reference_to_video"
         else:
             task = "text_to_video"
 
+    if video and not previous_interaction_id:
+        input_items.append(_media_item("video", video))
+    for clip in videos:
+        input_items.append(_media_item("video", clip))
+    for img in images:
+        input_items.append(_media_item("image", img))
+    # Live API: "Text input is not supported for upscale task."
+    if task != "upscale":
+        input_items.append({"type": "text", "text": prompt})
+
     response_format: dict[str, Any] = {"type": "video"}
-    if task == "edit":
+    if task in {"edit", "upscale"}:
         response_format["resolution"] = resolution
     elif task == "extend":
         response_format["duration"] = duration
@@ -184,12 +187,25 @@ def build_payload(
         response_format["delivery"] = "uri"
         response_format["gcs_uri"] = settings.output_gcs_uri
 
-    return {
-        "model": settings.omni_model,
+    generation_config: dict[str, Any] = {"video_config": {"task": task}}
+    if seed is not None:
+        generation_config["seed"] = seed
+
+    payload: dict[str, Any] = {
+        "model": model or settings.omni_model,
         "input": input_items,
         "response_format": [response_format],
-        "generation_config": {"video_config": {"task": task}},
+        "generation_config": generation_config,
     }
+    if store is not None:
+        payload["store"] = store
+    if background is not None:
+        payload["background"] = background
+    if previous_interaction_id:
+        payload["previous_interaction_id"] = previous_interaction_id
+    if labels:
+        payload["labels"] = labels
+    return payload
 
 
 def _create_interaction_sync(payload: dict[str, Any]) -> dict[str, Any]:
@@ -294,6 +310,42 @@ def extract_video(interaction: dict[str, Any]) -> tuple[bytes | None, str | None
         return None, output_video["uri"], output_video.get("mime_type") or "video/mp4"
 
     return None, None, None
+
+
+def _error_text(err: Any) -> str:
+    if isinstance(err, str):
+        return err.strip()
+    if not isinstance(err, dict):
+        return ""
+    code = str(err.get("code") or "").strip()
+    message = str(err.get("message") or err.get("detail") or "").strip()
+    if code and message:
+        return f"{code}: {message}"
+    return message or code
+
+
+def format_interaction_failure(interaction: dict[str, Any]) -> str:
+    """Keep the API's own failure text. A bare status hides policy and limit errors."""
+    messages: list[str] = []
+
+    def add(err: Any) -> None:
+        if isinstance(err, list):
+            for item in err:
+                add(item)
+            return
+        text = _error_text(err)
+        if text and text not in messages:
+            messages.append(text)
+
+    add(interaction.get("errors"))
+    add(interaction.get("error"))
+    for step in interaction.get("steps") or []:
+        if isinstance(step, dict):
+            add(step.get("errors"))
+            add(step.get("error"))
+    if not messages:
+        return "Omni interaction failed"
+    return "Omni interaction failed: " + " | ".join(messages)
 
 
 def extract_thoughts(interaction: dict[str, Any]) -> str:

@@ -11,6 +11,7 @@ from typing import Any
 
 from app import omni_client, prompt_enhancer
 from app.config import OUTPUT_DIR, gcs_prefix_for_inputs, settings
+from app.model_catalog import ModelProfile, profile_for
 from app.gcs_util import (
     mvhd_duration_sec,
     build_input_object_uri,
@@ -29,6 +30,7 @@ from app.prompt_utils import (
     frame_lock_prefix,
     reference_lock_prefix,
     rewrite_image_refs,
+    rewrite_video_refs,
 )
 
 GENERATE_KINDS = {
@@ -39,10 +41,10 @@ GENERATE_KINDS = {
 }
 
 
-# Verified against the API: editing a 16s clip returns
-# "Editing duration 16 exceeds maximum duration 10."
+# 1.1 rejects edits above 10s ("Editing duration N exceeds maximum duration 10").
+# 1.2's model card raises that ceiling to 15s. Callers should use the job's model.
 EDIT_MAX_INPUT_SEC = 10.0
-# Documented extend envelope: 1-30s in, up to 40s out.
+# 1.1 extend input cap. 1.2 accepts any length and keeps up to the last 30s.
 EXTEND_MAX_INPUT_SEC = 30.0
 
 
@@ -111,10 +113,19 @@ class Job:
             "source_job_id": self.source_job_id,
             "source_video_uri": self.source_video_uri,
             "duration_sec": self.duration_sec,
+            "model": self.meta.get("model"),
+            "edit_max_sec": _edit_limit(self),
+            "upscale_max_sec": _upscale_limit(self),
             "editable": bool(
                 self.video_uri
                 and self.duration_sec is not None
-                and self.duration_sec <= EDIT_MAX_INPUT_SEC
+                and self.duration_sec <= _edit_limit(self)
+            ),
+            "upscalable": bool(
+                self.video_uri
+                and _upscale_limit(self) is not None
+                and self.duration_sec is not None
+                and self.duration_sec <= _upscale_limit(self)
             ),
             "generate_task": self.meta.get("generate_task") or self.meta.get("task"),
             "reuse_ready": _reuse_ready(self),
@@ -150,8 +161,39 @@ class JobStore:
 job_store = JobStore()
 
 
+def _edit_limit(job: Job) -> float:
+    return float(profile_for(job.meta.get("model")).edit_max)
+
+
+def _upscale_limit(job: Job) -> float | None:
+    return profile_for(job.meta.get("model")).upscale_max
+
+
+def reuse_videos_from_job(job: Job) -> list[dict[str, str]]:
+    return [
+        {
+            "uri": item["uri"],
+            "mime_type": item.get("mime_type") or _mime_from_uri(item["uri"]),
+        }
+        for item in (job.meta.get("gcs_video_items") or [])
+        if str(item.get("uri", "")).startswith("gs://")
+    ]
+
+
+def interaction_can_chain(meta: dict | None) -> bool:
+    """Upscale interactions are terminal. Later edit/extend must resend the mp4."""
+    meta = meta or {}
+    mode = str(meta.get("mode") or "").lower()
+    task = str(meta.get("api_task") or meta.get("task") or "").lower()
+    return mode != "upscale" and task != "upscale"
+
+
 def _reuse_ready(job: Job) -> bool:
-    if job.meta.get("gcs_ref_items") or job.meta.get("gcs_refs"):
+    if (
+        job.meta.get("gcs_ref_items")
+        or job.meta.get("gcs_refs")
+        or job.meta.get("gcs_video_items")
+    ):
         return True
     kind = job.meta.get("generate_task") or job.meta.get("task")
     return job.mode == "generate" and kind == "text_to_video" and bool(
@@ -195,7 +237,7 @@ async def _submit_and_finalize(job: Job, *, payload: dict[str, Any]) -> None:
 
     if (interaction.get("status") or "").lower() == "failed":
         raise omni_client.OmniAPIError(
-            "Omni interaction failed",
+            omni_client.format_interaction_failure(interaction),
             body=interaction,
         )
 
@@ -256,8 +298,12 @@ async def _submit_and_finalize(job: Job, *, payload: dict[str, Any]) -> None:
 
 def _done_message(job: Job) -> str:
     length = f"{job.duration_sec:g}s clip" if job.duration_sec else "Done"
-    if job.duration_sec and job.duration_sec > EDIT_MAX_INPUT_SEC:
-        return f"Done — {length}; too long to Edit (max {EDIT_MAX_INPUT_SEC:g}s), Extend still works"
+    limit = _edit_limit(job)
+    if job.duration_sec and job.duration_sec > limit:
+        return (
+            f"Done — {length}; too long to Edit (max {limit:g}s for this model), "
+            "Extend still works"
+        )
     return f"Done — {length}"
 
 
@@ -291,14 +337,118 @@ def _persist_gcs_refs(job: Job, images: list[dict[str, str]]) -> None:
 
 
 def _mime_from_uri(uri: str) -> str:
-    lower = uri.lower()
+    lower = uri.lower().split("?", 1)[0]
     if lower.endswith((".jpg", ".jpeg")):
         return "image/jpeg"
     if lower.endswith(".webp"):
         return "image/webp"
     if lower.endswith(".gif"):
         return "image/gif"
+    if lower.endswith(".mp4"):
+        return "video/mp4"
+    if lower.endswith(".webm"):
+        return "video/webm"
+    if lower.endswith(".mov"):
+        return "video/quicktime"
     return "image/png"
+
+
+MAX_IMAGE_BYTES = 20 * 1024 * 1024
+MAX_VIDEO_BYTES = 40 * 1024 * 1024
+
+
+def _strip_data_url(data_b64: str) -> str:
+    data_b64 = (data_b64 or "").strip()
+    if "," in data_b64 and data_b64.startswith("data:"):
+        return data_b64.split(",", 1)[1]
+    return data_b64
+
+
+def _check_media_size(raw: bytes, *, kind: str, index: int) -> None:
+    limit = MAX_VIDEO_BYTES if kind == "video" else MAX_IMAGE_BYTES
+    if len(raw) > limit:
+        raise omni_client.OmniAPIError(
+            f"{kind} {index} is {len(raw) / (1024 * 1024):.1f} MB; "
+            f"this demo accepts up to {limit // (1024 * 1024)} MB"
+        )
+
+
+async def _materialize_client_images(items: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Download http(s) stills on the server. The browser often cannot read them."""
+    import base64
+
+    ready: list[dict[str, str]] = []
+    for index, item in enumerate(items, start=1):
+        url = (item.get("url") or "").strip()
+        if url.startswith(("http://", "https://")):
+            raw, mime = await download_image_bytes(url)
+            _check_media_size(raw, kind="image", index=index)
+            ready.append(
+                {
+                    "mime_type": mime or item.get("mime_type") or "image/jpeg",
+                    "data": base64.b64encode(raw).decode("ascii"),
+                }
+            )
+            continue
+        ready.append(item)
+    return ready
+
+
+async def _stage_uploads(
+    job: Job,
+    items: list[dict[str, str]],
+    *,
+    kind: str,
+    stem: str,
+) -> list[dict[str, str]]:
+    """Turn browser base64 or existing gs:// URIs into Omni media entries."""
+    import base64
+
+    use_gcs = bool(gcs_prefix_for_inputs())
+    staged: list[dict[str, str]] = []
+    default_mime = "video/mp4" if kind == "video" else "image/png"
+    for idx, item in enumerate(items, start=1):
+        uri = (item.get("uri") or "").strip()
+        if uri.startswith("gs://"):
+            staged.append(
+                {"mime_type": item.get("mime_type") or _mime_from_uri(uri), "uri": uri}
+            )
+            continue
+        if not item.get("data"):
+            raise omni_client.OmniAPIError(f"{kind} {idx} needs base64 data or a gs:// uri")
+        data_b64 = _strip_data_url(item["data"])
+        raw = base64.b64decode(data_b64)
+        _check_media_size(raw, kind=kind, index=idx)
+        mime = item.get("mime_type") or default_mime
+        if use_gcs:
+            local_path = await asyncio.to_thread(
+                save_bytes_locally,
+                raw,
+                job_id=job.id,
+                index=idx,
+                mime_type=mime,
+            )
+            gcs_uri = build_input_object_uri(
+                job.id, idx, guess_ext(uri or local_path.name, mime), stem=stem
+            )
+            uploaded = await asyncio.to_thread(
+                upload_local_file_to_gcs,
+                local_path,
+                gcs_uri=gcs_uri,
+                mime_type=mime,
+            )
+            staged.append({"mime_type": mime, "uri": uploaded})
+        else:
+            staged.append({"mime_type": mime, "data": data_b64})
+    return staged
+
+
+def _state_flags(profile: ModelProfile) -> dict[str, bool]:
+    if not profile.supports_multiturn:
+        return {}
+    # store keeps the interaction for 7 days so the next turn can pass
+    # previous_interaction_id. background returns an id immediately; we poll.
+    return {"store": True, "background": True}
 
 
 async def run_generation_job(
@@ -318,52 +468,115 @@ async def run_generation_job(
     source_job_id: str | None = None,
     enhance_prompt: bool = True,
     reuse_images: list[dict[str, str]] | None = None,
+    reuse_videos: list[dict[str, str]] | None = None,
+    client_videos: list[dict[str, str]] | None = None,
     generate_task: str | None = None,
+    model: str | None = None,
+    seed: int | None = None,
+    labels: dict[str, str] | None = None,
+    stateful: bool = False,
+    previous_interaction_id: str | None = None,
+    profile_assumed: bool = False,
 ) -> None:
     try:
+        model_id, profile, assumed = (
+            model or settings.omni_model,
+            profile_for(model or settings.omni_model),
+            profile_assumed,
+        )
         duration_str = f"{duration}s"
         mode = (mode or "generate").strip().lower()
         job.mode = mode
         job.source_job_id = source_job_id
         job.source_video_uri = source_video_uri
+        state = _state_flags(profile)
         job.meta = {
             "mode": mode,
             "duration": duration_str,
             "resolution": resolution,
             "aspect_ratio": aspect_ratio,
             "generate_audio": generate_audio,
-            "model": settings.omni_model,
+            "model": model_id,
+            "profile_assumed": assumed,
+            "stateful": bool(state),
+            "seed": seed,
+            "labels": labels or None,
             "generate_task": (generate_task or "").strip().lower() or None,
         }
 
-        if mode in {"continue", "edit", "extend"}:
-            if not source_video_uri or not source_video_uri.startswith("gs://"):
+        if mode in {"continue", "edit", "extend", "upscale"}:
+            api_task = {"extend": "extend", "upscale": "upscale"}.get(mode, "edit")
+            chain_id = previous_interaction_id if stateful and profile.supports_multiturn else None
+            if api_task == "upscale":
+                chain_id = None
+                if profile.upscale_max is None:
+                    raise omni_client.OmniAPIError(
+                        f"{model_id} has no standalone upscale in this demo. "
+                        "Switch to gemini-omni-1.2-flash."
+                    )
+            if not chain_id and (
+                not source_video_uri or not source_video_uri.startswith("gs://")
+            ):
                 raise omni_client.OmniAPIError(
-                    f"{mode} mode needs a gs:// source_video_uri "
-                    "(pick a completed job or paste a GCS video URI)"
-                )
-            # "continue" is an edit chained onto the previous job's output. The
-            # Agent Platform path rejects previous_interaction_id for this model,
-            # so each turn re-attaches the source video instead.
-            api_task = "extend" if mode == "extend" else "edit"
-
-            job.touch(JobStatus.submitting, "Checking source clip length…")
-            source_seconds = await asyncio.to_thread(
-                probe_video_duration, source_video_uri
-            )
-            job.meta["source_duration_sec"] = source_seconds
-            limit = EDIT_MAX_INPUT_SEC if api_task == "edit" else EXTEND_MAX_INPUT_SEC
-            if source_seconds is not None and source_seconds > limit:
-                raise omni_client.OmniAPIError(
-                    f"Source clip is {source_seconds:g}s but {api_task} accepts at most "
-                    f"{limit:g}s. Extended clips grow past the edit limit — "
-                    "pick an earlier, shorter clip in the chain."
+                    f"{mode} needs a gs:// source video, or a stored Omni 1.2 "
+                    "interaction to continue (多轮编辑)"
                 )
 
-            edit_prompt = prompt.strip()
-            # Edits must stay terse — the docs warn that over-describing an edit
-            # changes parts of the frame you never mentioned. Only extend, which
-            # is generative, gets the cinematography pass.
+            source_seconds = None
+            if source_video_uri and source_video_uri.startswith("gs://"):
+                job.touch(JobStatus.submitting, "Checking source clip length…")
+                source_seconds = await asyncio.to_thread(
+                    probe_video_duration, source_video_uri
+                )
+                job.meta["source_duration_sec"] = source_seconds
+
+            if api_task == "edit":
+                limit = profile.edit_max
+            elif api_task == "upscale":
+                limit = profile.upscale_max or 0
+            else:
+                limit = profile.extend_input_max
+            if (
+                limit is not None
+                and source_seconds is not None
+                and source_seconds > limit + 0.05
+            ):
+                raise omni_client.OmniAPIError(
+                    f"Source clip is {source_seconds:g}s but {api_task} on {model_id} "
+                    f"accepts at most {limit:g}s."
+                )
+            if (
+                api_task == "extend"
+                and source_seconds is not None
+                and source_seconds > 30
+            ):
+                job.meta["extend_note"] = (
+                    "Input is longer than 30s. Omni keeps up to the last 30s "
+                    "and appends the new segment (about 40s out)."
+                )
+
+            edit_images: list[dict[str, str]] = []
+            if client_images and api_task in {"edit", "extend"}:
+                cap = profile.edit_reference_images_max
+                if cap <= 0:
+                    raise omni_client.OmniAPIError(
+                        f"{model_id} does not take reference images on {api_task}"
+                    )
+                if len(client_images) > cap:
+                    raise omni_client.OmniAPIError(
+                        f"{api_task} accepts at most {cap} reference images"
+                    )
+                job.touch(
+                    JobStatus.downloading,
+                    f"Staging {len(client_images)} edit reference image(s)…",
+                )
+                client_images = await _materialize_client_images(client_images)
+                edit_images = await _stage_uploads(
+                    job, client_images, kind="image", stem="editref"
+                )
+                _persist_gcs_refs(job, edit_images)
+
+            edit_prompt = "" if api_task == "upscale" else prompt.strip()
             if api_task == "extend" and enhance_prompt:
                 job.touch(JobStatus.submitting, "Polishing instruction…")
                 polished = await prompt_enhancer.enhance(edit_prompt, kind="extend")
@@ -376,18 +589,34 @@ async def run_generation_job(
                 edit_prompt = (
                     f"{edit_prompt.rstrip('.')}. Keep everything else the same."
                 )
+            if edit_images:
+                edit_prompt = rewrite_image_refs(edit_prompt, len(edit_images))
             job.meta["source_video_uri"] = source_video_uri
             job.meta["api_task"] = api_task
+            job.meta["previous_interaction_id"] = chain_id
             job.meta["final_prompt_preview"] = edit_prompt[:4000]
-            job.meta["image_count"] = 0
+            if api_task == "upscale":
+                job.meta["upscale_note"] = (
+                    "No text was sent. Upscale takes the source video and a higher resolution only."
+                )
+            job.meta["image_count"] = len(edit_images)
             payload = omni_client.build_payload(
                 prompt=edit_prompt,
-                images=[],
+                images=edit_images,
                 duration=duration_str,
                 resolution=resolution,
                 aspect_ratio=aspect_ratio,
                 task=api_task,
-                video={"mime_type": "video/mp4", "uri": source_video_uri},
+                video=(
+                    {"mime_type": "video/mp4", "uri": source_video_uri}
+                    if source_video_uri and not chain_id
+                    else None
+                ),
+                model=model_id,
+                seed=seed,
+                labels=labels,
+                previous_interaction_id=chain_id,
+                **state,
             )
             await _submit_and_finalize(job, payload=payload)
             return
@@ -435,6 +664,7 @@ async def run_generation_job(
             job.meta["image_delivery"] = "gcs_reuse"
             _persist_gcs_refs(job, images)
         elif client_images:
+            client_images = await _materialize_client_images(client_images)
             job.touch(
                 JobStatus.downloading,
                 f"Staging {len(client_images)} browser image(s) "
@@ -512,14 +742,40 @@ async def run_generation_job(
         else:
             job.touch(JobStatus.submitting, "No images — text_to_video…")
 
-        kind, api_task = resolve_generate_kind(requested_kind, len(images))
+        videos: list[dict[str, str]] = []
+        if requested_kind == "reference_to_video":
+            incoming_videos = list(client_videos or [])
+            if not incoming_videos and reuse_videos:
+                incoming_videos = list(reuse_videos)
+            if incoming_videos:
+                job.touch(
+                    JobStatus.downloading,
+                    f"Staging {len(incoming_videos)} reference video(s)…",
+                )
+                videos = await _stage_uploads(
+                    job, incoming_videos, kind="video", stem="vid"
+                )
+                persisted = [
+                    {"uri": item["uri"], "mime_type": item.get("mime_type") or "video/mp4"}
+                    for item in videos
+                    if item.get("uri")
+                ]
+                if persisted:
+                    job.meta["gcs_video_items"] = persisted
+
+        kind, api_task = resolve_generate_kind(
+            requested_kind, len(images) + len(videos)
+        )
         job.meta["generate_task"] = kind
         job.meta["api_task"] = api_task
         job.meta["image_count"] = len(images)
+        job.meta["video_count"] = len(videos)
 
         if api_task == "text_to_video" and images:
             images = []
+            videos = []
             job.meta["image_count"] = 0
+            job.meta["video_count"] = 0
             job.meta["images_ignored"] = "text_to_video does not send stills"
         elif kind == "frames_to_video" and len(images) != 2:
             raise omni_client.OmniAPIError(
@@ -529,13 +785,20 @@ async def run_generation_job(
             raise omni_client.OmniAPIError(
                 "image_to_video needs 1 still (first frame) or 2 stills (first + last)"
             )
-        elif api_task == "reference_to_video" and not images:
+        elif api_task == "reference_to_video" and not images and not videos:
             raise omni_client.OmniAPIError(
-                "reference_to_video needs at least one reference image "
-                "(upload a file, paste a URL, or pick Load example)"
+                "reference_to_video needs at least one reference image or video"
+            )
+        if len(images) > profile.reference_images_max:
+            raise omni_client.OmniAPIError(
+                f"at most {profile.reference_images_max} images per prompt"
+            )
+        if len(videos) > profile.reference_videos_max:
+            raise omni_client.OmniAPIError(
+                f"at most {profile.reference_videos_max} reference videos per prompt"
             )
 
-        rewritten = rewrite_image_refs(prompt_body, len(images))
+        rewritten = rewrite_video_refs(rewrite_image_refs(prompt_body, len(images)))
         spoken = extract_spoken_lines(prompt_body)
         job.meta["shot_list"] = prompt_body
         speech = dialogue_lock(prompt_body)
@@ -580,10 +843,12 @@ async def run_generation_job(
             if api_task == "image_to_video":
                 lock = frame_lock_prefix(len(images))
             else:
-                lock = reference_lock_prefix(len(images))
+                lock = reference_lock_prefix(len(images), len(videos))
                 extra = (
                     "Use the given image(s) as references for video generation. "
                     "The images should not be used as literal initial frames."
+                    if images
+                    else ""
                 )
             parts = [control]
             if lock:
@@ -598,10 +863,15 @@ async def run_generation_job(
         payload = omni_client.build_payload(
             prompt=final_prompt,
             images=images,
+            videos=videos,
             duration=duration_str,
             resolution=resolution,
             aspect_ratio=aspect_ratio,
             task=api_task,
+            model=model_id,
+            seed=seed,
+            labels=labels,
+            **state,
         )
         await _submit_and_finalize(job, payload=payload)
     except Exception as exc:

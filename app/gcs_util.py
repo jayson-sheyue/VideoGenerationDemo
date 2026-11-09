@@ -28,8 +28,15 @@ def ext_for_mime(mime: str) -> str:
         "image/jpg": ".jpg",
         "image/webp": ".webp",
         "image/gif": ".gif",
+        "image/heic": ".heic",
+        "image/heif": ".heif",
+        "video/mp4": ".mp4",
+        "video/webm": ".webm",
+        "video/quicktime": ".mov",
+        "video/mpeg": ".mpeg",
+        "video/3gpp": ".3gp",
     }
-    return mapping.get((mime or "").split(";")[0].strip().lower(), ".png")
+    return mapping.get((mime or "").split(";")[0].strip().lower(), ".bin")
 
 
 def decode_data_url_or_b64(raw: str) -> bytes:
@@ -325,14 +332,16 @@ def guess_ext(url: str, mime: str) -> str:
     return ext_for_mime(mime)
 
 
-def build_input_object_uri(job_id: str, index: int, ext: str) -> str:
+def build_input_object_uri(
+    job_id: str, index: int, ext: str, *, stem: str = "ref"
+) -> str:
     prefix = gcs_prefix_for_inputs()
     if not prefix:
         raise OmniAPIError(
             "No GCS input prefix configured. Set INPUT_GCS_URI or OUTPUT_GCS_URI "
             "in .env, e.g. INPUT_GCS_URI=gs://your-bucket/omni-input/"
         )
-    return f"{prefix.rstrip('/')}/{job_id}/ref_{index:02d}{ext}"
+    return f"{prefix.rstrip('/')}/{job_id}/{stem}_{index:02d}{ext}"
 
 
 def _metadata_service_account() -> str:

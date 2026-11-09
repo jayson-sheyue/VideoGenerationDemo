@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Manrope:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/static/style.css?v=20" />
+    <link rel="stylesheet" href="/static/style.css?v=26" />
   </head>
   <body>
     <div class="noise" aria-hidden="true"></div>
@@ -19,9 +19,13 @@
         <span class="brand-mark">OF</span>
         <div>
           <p class="brand-name">Omni Flash Video Lab</p>
-          <p class="brand-sub">text · first frame · first+last · references · edit · extend</p>
+          <p class="brand-sub">1.2 Flash · 15s · references · edit · extend · upscale</p>
         </div>
       </div>
+      <nav class="site-nav" aria-label="页面">
+        <a href="/" aria-current="page">实验台</a>
+        <a href="/docs">官方文档</a>
+      </nav>
       <div class="health" id="health">Checking GCP…</div>
     </header>
 
@@ -32,11 +36,30 @@
           <button type="button" class="ghost" id="loadExample">Load example</button>
         </div>
 
+        <div class="model-bar">
+          <label class="field">
+            <span>Model</span>
+            <select id="modelSelect">
+              <option value="gemini-omni-1.2-flash" selected>Omni 1.2 Flash · GA</option>
+              <option value="gemini-omni-1.1-flash-preview">Omni 1.1 Flash · Preview</option>
+              <option value="custom">自定义模型 ID</option>
+            </select>
+          </label>
+          <label class="field" id="customModelField" hidden>
+            <span>Model ID</span>
+            <input id="customModel" type="text" spellcheck="false" placeholder="gemini-omni-…" />
+          </label>
+        </div>
+        <p class="hint tight" id="modelNote">
+          1.2 为正式版：生成和编辑 3–15 秒，可多轮改同一条 Interaction，并可单独放大到 1080p / 4K。
+        </p>
+
         <div class="mode-tabs" id="modeTabs" role="tablist" aria-label="Omni workflow">
           <button type="button" class="mode-tab active" data-mode="generate">Generate</button>
           <button type="button" class="mode-tab" data-mode="continue">Continue edit</button>
           <button type="button" class="mode-tab" data-mode="edit">Edit video</button>
           <button type="button" class="mode-tab" data-mode="extend">Extend</button>
+          <button type="button" class="mode-tab" data-mode="upscale">Upscale</button>
         </div>
 
         <div class="mode-tabs gen-tabs" id="genTabs" role="tablist" aria-label="Generate task">
@@ -73,7 +96,7 @@
           </label>
         </div>
 
-        <label class="field">
+        <label class="field" id="promptField">
           <span id="promptLabel">Prompt</span>
           <textarea
             id="prompt"
@@ -85,12 +108,7 @@
         <div class="grid-3" id="mediaControls">
           <label class="field" id="durationField">
             <span>Duration</span>
-            <select id="duration">
-              <option value="4">4s</option>
-              <option value="6">6s</option>
-              <option value="8" selected>8s</option>
-              <option value="10">10s</option>
-            </select>
+            <select id="duration"></select>
           </label>
           <label class="field" id="resolutionField">
             <span>Resolution</span>
@@ -109,6 +127,27 @@
             </select>
           </label>
         </div>
+
+        <details class="advanced" id="advanced">
+          <summary>Seed、计费标签、多轮状态</summary>
+          <div class="grid-3 advanced-grid">
+            <label class="field" id="seedField">
+              <span>Seed</span>
+              <input id="seed" type="number" min="0" max="4294967295" step="1" placeholder="留空则不固定" />
+            </label>
+            <label class="field" id="labelsField">
+              <span>Labels</span>
+              <input id="labels" type="text" placeholder="team=demo, cost=lab" />
+            </label>
+            <label class="check stateful-check" id="statefulField">
+              <input type="checkbox" id="stateful" checked />
+              多轮编辑（不重传成片）
+            </label>
+          </div>
+          <p class="hint tight" id="advancedHint">
+            Seed 与 labels 只在 Omni 1.2 上发送。多轮编辑需要上一条任务的 interaction id，服务端大约保留 7 天。
+          </p>
+        </details>
 
         <div class="toggles" id="enhanceToggle">
           <label class="check"
@@ -130,6 +169,9 @@
             ><input type="checkbox" id="noBgm" checked /> no background music</label
           >
         </div>
+        <p class="hint" id="audioInputNote">
+          音频文件不能作为输入。公开 API 未开放音频参考（Cloud 博客写明需 allowlist）。对白、音效和音乐写在提示词里，由成片一起生成。
+        </p>
 
         <div id="refsSection">
           <div class="refs-head">
@@ -140,7 +182,7 @@
             </div>
           </div>
           <p class="hint" id="refsHint">
-            可粘贴公网 URL，或直接从本地上传。图片由浏览器读入后上传至 GCS 再提交 Omni。
+            可粘贴公网 URL，或直接从本地上传。浏览器读不到的地址会改由服务端下载，再上传到 GCS。
           </p>
           <input
             id="filePicker"
@@ -150,6 +192,27 @@
             hidden
           />
           <div id="imageList" class="image-list"></div>
+        </div>
+
+        <div id="videoRefs" hidden>
+          <div class="refs-head">
+            <h2>Reference videos</h2>
+            <div class="refs-actions">
+              <button type="button" class="ghost" id="addVideo">+ gs:// clip</button>
+              <button type="button" class="ghost" id="uploadVideos">Upload clips</button>
+            </div>
+          </div>
+          <p class="hint" id="videoHint">
+            最多 3 段，用来锁人物、动作或风格，不当源片去剪辑。参考视频里的声音会被忽略。Gemini API 建议每段大约不超过 3 秒。
+          </p>
+          <input
+            id="videoPicker"
+            type="file"
+            accept="video/mp4,video/webm,video/quicktime,video/mpeg"
+            multiple
+            hidden
+          />
+          <div id="videoList" class="image-list"></div>
         </div>
 
         <div class="actions">
@@ -169,7 +232,7 @@
           <div class="stage-empty" id="stageEmpty">
             <p class="stage-title">No clip yet</p>
             <p class="stage-copy">
-              请先选一种生成能力（文生 / 首帧 / 首尾帧 / 参考图），出片后再用 Continue / Edit / Extend 迭代。
+              先选模型，再选文生 / 首帧 / 首尾帧 / 参考。成片之后可以继续编辑、续写，或把 360p / 720p 草稿放大。
             </p>
           </div>
           <video id="player" controls playsinline hidden></video>
@@ -185,6 +248,7 @@
           <button type="button" class="ghost" id="useForContinue">以此结果继续编辑</button>
           <button type="button" class="ghost" id="useForEdit">以此结果编辑</button>
           <button type="button" class="ghost" id="useForExtend">以此结果续写</button>
+          <button type="button" class="ghost" id="useForUpscale">以此结果放大</button>
         </div>
 
         <div class="comparison" id="comparison" hidden>
@@ -225,6 +289,6 @@
       </section>
     </main>
 
-    <script src="/static/app.js?v=20"></script>
+    <script src="/static/app.js?v=26"></script>
   </body>
 </html>

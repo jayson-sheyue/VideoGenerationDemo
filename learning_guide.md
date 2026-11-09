@@ -1,13 +1,35 @@
-# Gemini Omni 1.1 Flash 学习指南
+# Gemini Omni Flash 学习指南
 
-本文说明 **Gemini Omni 1.1 Flash** 能做什么、请求怎么组、参数上限是什么，以及和 **Veo**、和本仓库 Demo 的差别。规格以 Google Cloud 文档为准，并标注了本 Demo 对 **线上 API** 的实测修正。
+本文说明 **Omni 1.2 Flash（GA）** 和 **Omni 1.1 Flash（Preview）** 能做什么、请求怎么组、参数上限是什么，以及和本仓库 Demo 的差别。规格以 Google Cloud 文档为准（核对于 2026-11-06），并保留本 Demo 对 **线上 API** 的实测修正。运行中的汇总页是 `/docs`。
 
 官方入口：
 
-- 模型卡片：[Gemini Omni 1.1 Flash Preview](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/omni-1-1-flash)
+- 模型卡片：[Gemini Omni 1.2 Flash](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/omni-1-2-flash) · [1.1 Flash Preview](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/omni-1-1-flash)
 - 视频总览：[Generate videos with Agent Platform](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/video/overview)
 - Interactions API：[locations/global/interactions](https://docs.cloud.google.com/gemini-enterprise-agent-platform/reference/models/interactions-api)
-- 产品介绍：[Build with Gemini Omni 1.1 Flash](https://blog.google/innovation-and-ai/technology/developers-tools/build-with-gemini-omni-1-1-flash/)
+- 发布说明：[Introducing Gemini Omni 1.2 Flash](https://blog.google/innovation-and-ai/technology/developers-tools/introducing-gemini-omni-1-2-flash/) · [Cloud GA 公告](https://cloud.google.com/blog/products/ai-machine-learning/gemini-omni-1-2-flash-generally-available)
+- Gemini API 侧的提示词和限制：[Generate and edit videos](https://ai.google.dev/gemini-api/docs/omni)
+
+## 0. 1.2 相对 1.1 多出来的部分
+
+模型 ID：`gemini-omni-1.2-flash`。1.1 仍是 `gemini-omni-1.1-flash-preview`。
+
+| | 1.2 | 1.1 |
+| --- | --- | --- |
+| 生成 | 3–15 秒。首尾帧 3–10 秒 | 3–10 秒 |
+| 编辑输入 | ≤ 15 秒，可再加最多 2 张参考图 | ≤ 10 秒（线上实测 `Editing duration N exceeds maximum duration 10`） |
+| 多轮 | `store: true` + `previous_interaction_id`。状态约 7 天 | Agent Platform 会拒 `previous_interaction_id`，只能重传 `gs://` |
+| 续写 | 追加 3–10 秒。源片可以更长，但只使用最后约 10 秒，并拼到最后约 30 秒上 | 本 Demo 仍把输入限制在 30 秒 |
+| 放大 | `task=upscale`，源片 ≤ 15 秒。只传源视频和目标分辨率，线上拒绝文字 | 不发送 |
+| Seed / labels | `generation_config.seed`（0–4294967295）；请求级 `labels` | 不发送 |
+| 参考视频 | 每条 prompt 最多 3 段。Gemini API 建议每段约 3 秒，声音会被忽略 | 文档同样列出，本 Demo 两种模型都可以挂 |
+| 音频输入 | 模型卡片：不支持。Cloud 博客：allowlist | 不支持 |
+| 分辨率 | 360p / 720p / 1080p / 4k。低分辨率适合先出草稿再放大 | 同样四档 |
+| 价格（发布说明） | 720p 约 $0.07/秒，比 1.1 低约 30% | 见当时的价目 |
+
+1.2 请求在本 Demo 里还会带 `background: true`，创建调用尽快返回 id，页面继续轮询。取消等待不会取消已经提交的生成。
+
+下面第 3 节起的 task 说明仍然适用。凡是写「10 秒」的编辑上限，在 1.2 上改读 **15 秒**；文生 / 首帧 / 参考的时长上限改读 **15 秒**。首尾帧不要超过 10 秒。
 
 ---
 
@@ -116,7 +138,7 @@ POST https://aiplatform.googleapis.com/v1beta1/projects/PROJECT_ID/locations/glo
 
 > Use the given image(s) as references for video generation. The images should not be used as literal initial frames.
 
-也可以同时挂参考 **视频**（风格或主体），本 Demo 只用图片（本地上传或 URL）。
+也可以同时挂最多 **3** 段参考视频（人物、动作或风格）。本 Demo 的 References 模式可以上传或粘贴 `gs://`。提示词里的 `@视频N` 会改成 `<VIDEO_REF_N>`。参考视频里的声音会被忽略，不要把它当剪辑源。
 
 绑定方式（本 Demo 按官方 cookbook 做的）：
 
@@ -152,7 +174,7 @@ Veo 的 reference 还有 `asset` / `style` 类型且张数更少；Omni 走 Inte
 
 文档：[Edit videos](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/video/edit-videos)。
 
-多轮编辑在文档里有时写成把上一次 `interaction.id` 塞回去。**1.1 在 Agent Platform 上会拒 `previous_interaction_id`。** 正确做法是每次新请求，把最新成片的 `gs://` 再当 `input.video`。本 Demo 的 Continue 就是这样。
+多轮编辑：1.2 把上一次 `interaction.id` 放进 `previous_interaction_id`（需要 `store: true`）。**1.1 在 Agent Platform 上会拒这个字段**，所以 1.1 的 Continue 仍是新请求，把最新成片的 `gs://` 再当 `input.video`。1.2 取消「多轮编辑」时走同一条重传路径。1.2 的编辑还可以再带最多两张参考图。
 
 ### 3.5 `extend` — 续写（往后接，返回整段）
 
@@ -183,11 +205,20 @@ API 对「这个 task 不该出现的字段」是直接 4xx，而不是忽略。
 
 | `task` | `aspect_ratio` | `resolution` | `duration` | `delivery` / `gcs_uri` |
 | --- | --- | --- | --- | --- |
-| `text_to_video` / `image_to_video` / `reference_to_video` | ✓ | ✓ | ✓（3s–10s） | 推荐 |
+| `text_to_video` / `image_to_video` / `reference_to_video` | ✓ | ✓ | ✓（1.2 为 3s–15s；首尾帧 3s–10s；1.1 为 3s–10s） | 推荐 |
 | `edit` | ✕ | ✓ | ✕（跟源片） | 推荐 |
+| `upscale`（仅 1.2） | ✕ | ✓（目标分辨率） | ✕ | 推荐 |
 | `extend` | ✕（文档有、线上拒） | ✕ | ✓（本次续写 3s–10s） | 推荐 |
 
 画幅取值：`16:9`、`9:16`。分辨率：`360p`、`720p`、`1080p`、`4k`。时长字符串必须带 `s`，例如 `"8s"`。
+
+### 放大，以及它和 Transcoder API 的差别
+
+`upscale` 只提高分辨率。[VideoGenerationModelParams](https://docs.cloud.google.com/gemini-enterprise-agent-platform/reference/rest/Shared.Types/VideoGenerationModelParams) 的原文是 “Upscale a video to a higher resolution”。[1.2 模型卡片](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/omni-1-2-flash) 把它列为 standalone video upscaling，输入最长 15 秒。[GA 公告](https://cloud.google.com/blog/products/ai-machine-learning/gemini-omni-1-2-flash-generally-available) 建议先用 360p / 720p 出草稿，再放大到 1080p 或 4K。
+
+线上实测：input 里只要有 `type: text`，就返回 `Text input is not supported for upscale task`。本 Demo 因此不传提示词、参考图或 `previous_interaction_id`，只传源视频和 `response_format.resolution`。不能用它改内容。
+
+[Cloud Transcoder API](https://docs.cloud.google.com/transcoder/docs/concepts/overview) 是转码服务：容器（MP4 / DASH / HLS）、码率、裁剪、贴片、编码参数、HDR、加密、缩略图。它的分辨率变化是重采样后再编码，不是 Omni 的生成式放大，也不受 15 秒上限约束。本 Demo 不调用它。
 
 ---
 
@@ -256,18 +287,21 @@ Omni 对提示词 **跟得紧，但自己很少补电影感**。分镜太干，�
 
 已覆盖：
 
-- `text_to_video`、`image_to_video`（一张首帧，或两张首+尾帧）、`reference_to_video`（浏览器图 / 本地上传 → GCS）
-- `edit`（Continue / Edit 两个入口，同一 task）
-- `extend`（完整拼接成片、10s 编辑上限提示）
-- GCS 出入、签名播放、血缘对比、建议气泡、图片复用（重新生成）
-- 界面按能力切换：Text / First frame / First + last / References，以及可点的示例提示词
+- `text_to_video`、`image_to_video`（一张首帧，或两张首+尾帧）、`reference_to_video`（图，以及最多 3 段参考视频）
+- `edit`（1.2 默认可多轮；1.1 重传 `gs://`。1.2 可再挂 2 张参考图）
+- `extend`、`upscale`（仅 1.2；放大后不能链式编辑，后续操作重传成片）
+- `seed` 与 `labels`（仅 1.2）
+- GCS 出入、签名播放、血缘对比、建议气泡、图片和参考视频复用（重新生成）
+- 界面按模型和能力切换；各模式隔离提示词 / 参考图 / 时长 / 分辨率，乱序切换也能测当前功能
+- `/docs` 官方文档页；示例提示词与 gstatic 示例图按真实画面配对
+- 失败任务把 Omni 的 `errors` 原文写进 `message`
 
-未覆盖（官方支持，可自行扩展）：
+未覆盖：
 
-- 参考 **视频**（`reference_to_video` 的 video input）
-- 官方异步 `background: true`（本 Demo 自己 poll）
+- 音频参考上传（模型卡片不支持输入；Cloud 博客写明需 allowlist）
+- `stream: true` 的增量 thoughts
 - 控制台 Media Studio；仅 REST
-- 把成片当下一轮的参考视频（只把成片当 edit/extend 的 source）
+- 改配音 / 改台词
 
 ---
 
@@ -283,8 +317,8 @@ Omni 对提示词 **跟得紧，但自己很少补电影感**。分镜太干，�
 
 ## 10. 建议阅读顺序
 
-1. 本文第 3–4 节，弄清五个 task 和 `response_format` 裁剪。
-2. [模型卡片](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/omni-1-1-flash) 看配额与 MIME。
+1. 本文第 0 节和第 3–4 节，弄清 1.2 增量、各 task 和 `response_format` 裁剪。
+2. [1.2 模型卡片](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/omni-1-2-flash) 看配额与 MIME；需要对照 Preview 时再看 [1.1](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/omni-1-1-flash)。
 3. [参考生视频](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/video/generate-videos-from-references) → [编辑](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/video/edit-videos) → [续写](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/video/extend-videos)。
 4. 仓库里 `app/omni_client.py` 的 `build_payload()`、`app/jobs.py` 的模式分支，对照一次真实请求。
 5. 打开 Demo：试用示例 → 四种 Generate → Edit → Extend。本地图走 **Upload files**。

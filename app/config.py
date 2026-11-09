@@ -45,7 +45,7 @@ class Settings(BaseSettings):
     # Example: http://127.0.0.1:7890
     http_proxy: str = ""
     https_proxy: str = ""
-    omni_model: str = "gemini-omni-1.1-flash-preview"
+    omni_model: str = "gemini-omni-1.2-flash"
     # Env: PROMPT_ENHANCE / PROMPT_ENHANCE_MODEL / PROMPT_ENHANCE_LOCATION
     prompt_enhance: bool = True
     prompt_enhance_model: str = "gemini-2.5-flash"

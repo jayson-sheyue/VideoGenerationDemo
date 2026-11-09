@@ -6,7 +6,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, model_validator
 
 from app.config import (
     ACTIVE_PROXY,
@@ -19,11 +19,20 @@ from app.config import (
 from app.gcs_util import sign_gcs_read_url, stage_images_to_gcs
 from app import prompt_enhancer
 from app.jobs import (
-    EDIT_MAX_INPUT_SEC,
     JobStatus,
     job_store,
     reuse_images_from_job,
+    reuse_videos_from_job,
+    interaction_can_chain,
     run_generation_job,
+)
+from app.model_catalog import (
+    CATALOG,
+    SEED_MAX,
+    duration_bounds,
+    normalize_labels,
+    profile_for,
+    resolve_model,
 )
 from app.omni_client import OmniAPIError
 from app import omni_client
@@ -35,19 +44,45 @@ from app.prompt_utils import (
     extract_reference_urls,
 )
 
-app = FastAPI(title="Omni 1.1 Flash Video Demo", version="0.1.0")
+app = FastAPI(
+    title="Omni Flash Video Lab",
+    version="0.2.0",
+    docs_url="/api/openapi",
+    redoc_url=None,
+)
 
 STATIC_DIR = ROOT_DIR / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 class ReferenceImage(BaseModel):
+    """A still the browser already read, or an http(s) URL the server downloads.
+
+    Public image hosts often block browser fetches. Edit and generate send the
+    URL in this JSON body instead of reading the file in the page.
+    """
+
     mime_type: str = "image/png"
-    data: str = Field(..., min_length=8, description="Base64 image bytes")
+    data: str | None = None
+    url: str | None = None
+
+    @model_validator(mode="after")
+    def one_source(self):
+        has_data = bool(self.data and len(self.data) >= 8)
+        has_url = bool(self.url and self.url.startswith(("http://", "https://")))
+        if has_data == has_url:
+            raise ValueError("reference image needs either base64 data or an http(s) url")
+        return self
 
 
 class GcsUploadTestRequest(BaseModel):
     reference_images: list[ReferenceImage] = Field(..., min_length=1)
+
+
+class MediaRef(BaseModel):
+    mime_type: str = "video/mp4"
+    data: str | None = None
+    uri: str | None = None
 
 
 class GenerateRequest(BaseModel):
@@ -55,18 +90,26 @@ class GenerateRequest(BaseModel):
     image_urls: list[HttpUrl] = Field(default_factory=list)
     # Browser-fetched images — preferred when server cannot reach OSS DNS.
     reference_images: list[ReferenceImage] = Field(default_factory=list)
-    duration: int = Field(default=8, ge=3, le=10)
+    # Reference clips for reference_to_video. data is base64, or uri is gs://.
+    reference_videos: list[MediaRef] = Field(default_factory=list)
+    duration: int = Field(default=8, ge=3, le=15)
     resolution: str = Field(default="720p")
     aspect_ratio: str = Field(default="16:9")
     generate_audio: bool = True
     no_subtitles: bool = True
     no_bgm: bool = True
-    # generate | continue | edit | extend
+    # generate | continue | edit | extend | upscale
     mode: str = Field(default="generate")
     # Omni generate task: text_to_video | image_to_video | frames_to_video | reference_to_video
     generate_task: str | None = None
     enhance_prompt: bool = True
-    # For continue/edit/extend: gs://…mp4 from a prior job (or any GCS video)
+    # Empty uses OMNI_MODEL. A known id or any custom model id is accepted.
+    model: str | None = None
+    seed: int | None = Field(default=None, ge=0, le=SEED_MAX)
+    labels: dict[str, str] = Field(default_factory=dict)
+    # Omni 1.2: continue from the stored interaction instead of re-uploading.
+    stateful: bool = True
+    # For continue/edit/extend/upscale: gs://…mp4 from a prior job (or any GCS video)
     source_video_uri: str | None = None
     source_job_id: str | None = None
     # Generate again using GCS refs already uploaded for this job.
@@ -78,12 +121,19 @@ async def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
 
 
+@app.get("/docs")
+async def docs_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "docs.html")
+
+
 @app.get("/api/health")
 async def health() -> dict:
+    default_id, _profile, _assumed = resolve_model(None)
     return {
         "ok": True,
         "project_configured": bool(settings.google_cloud_project),
-        "model": settings.omni_model,
+        "model": default_id,
+        "models": [profile.to_public() for profile in CATALOG.values()],
         "input_gcs_uri": settings.input_gcs_uri or None,
         "output_gcs_uri": settings.output_gcs_uri or None,
         "image_delivery": "gcs" if (settings.input_gcs_uri or settings.output_gcs_uri) else "base64",
@@ -93,6 +143,7 @@ async def health() -> dict:
         "runtime": "cloud_run" if IS_CLOUD_RUN else "local",
         "prompt_enhance": settings.prompt_enhance,
         "prompt_enhance_model": settings.prompt_enhance_model,
+        "docs": "/docs",
     }
 
 
@@ -135,9 +186,13 @@ async def test_gcs_upload(body: GcsUploadTestRequest) -> dict:
         raise HTTPException(400, "INPUT_GCS_URI / OUTPUT_GCS_URI not configured")
 
     job = await job_store.create()
-    items = [
-        {"mime_type": img.mime_type, "data": img.data} for img in body.reference_images
-    ]
+    items = []
+    for img in body.reference_images:
+        if img.url:
+            data_b64, mime = await download_image_as_base64(img.url)
+            items.append({"mime_type": mime, "data": data_b64})
+        else:
+            items.append({"mime_type": img.mime_type, "data": img.data})
     try:
         staged = await asyncio.to_thread(
             stage_images_to_gcs,
@@ -175,8 +230,23 @@ async def generate(body: GenerateRequest) -> dict:
         raise HTTPException(400, "aspect_ratio must be 16:9 or 9:16")
 
     mode = (body.mode or "generate").strip().lower()
-    if mode not in {"generate", "continue", "edit", "extend"}:
-        raise HTTPException(400, "mode must be generate|continue|edit|extend")
+    if mode not in {"generate", "continue", "edit", "extend", "upscale"}:
+        raise HTTPException(400, "mode must be generate|continue|edit|extend|upscale")
+
+    model_id, profile, assumed = resolve_model(body.model)
+    if body.seed is not None and not profile.supports_seed:
+        raise HTTPException(400, f"{model_id} does not accept generation_config.seed")
+    try:
+        labels = normalize_labels(body.labels)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if labels and not profile.supports_labels:
+        raise HTTPException(400, f"{model_id} does not accept labels")
+    if mode == "upscale" and profile.upscale_max is None:
+        raise HTTPException(
+            400,
+            f"{model_id} has no standalone upscale. Use gemini-omni-1.2-flash.",
+        )
 
     generate_task = (body.generate_task or "").strip().lower() or None
     if generate_task and generate_task not in {
@@ -191,14 +261,49 @@ async def generate(body: GenerateRequest) -> dict:
             "frames_to_video|reference_to_video",
         )
 
+    if mode not in {"continue", "edit", "upscale"}:
+        low, high = duration_bounds(profile, mode=mode, generate_task=generate_task)
+        if not low <= body.duration <= high:
+            raise HTTPException(
+                400,
+                f"duration must be {low}–{high}s for {model_id}"
+                + (" first+last frames" if generate_task == "frames_to_video" else ""),
+            )
+
     urls = [str(u) for u in body.image_urls]
     if mode == "generate" and generate_task != "text_to_video" and not urls:
         _, urls = extract_reference_urls(body.prompt)
 
-    client_images = [
-        {"mime_type": img.mime_type, "data": img.data} for img in body.reference_images
+    client_images = []
+    for img in body.reference_images:
+        entry = {"mime_type": img.mime_type}
+        if img.data:
+            entry["data"] = img.data
+        if img.url:
+            entry["url"] = img.url
+        client_images.append(entry)
+    client_videos = [
+        {
+            "mime_type": item.mime_type,
+            "data": item.data,
+            "uri": (item.uri or "").strip() or None,
+        }
+        for item in body.reference_videos
+        if item.data or (item.uri or "").strip()
     ]
+    if len(client_videos) > profile.reference_videos_max:
+        raise HTTPException(
+            400, f"at most {profile.reference_videos_max} reference videos"
+        )
+    if mode in {"continue", "edit", "extend"} and len(client_images) > profile.edit_reference_images_max:
+        raise HTTPException(
+            400,
+            f"{model_id} accepts at most {profile.edit_reference_images_max} "
+            f"reference images on {mode}",
+        )
+
     reuse_images: list[dict[str, str]] = []
+    reuse_videos: list[dict[str, str]] = []
     prompt_text = body.prompt.strip()
     generate_source_job_id = body.source_job_id
 
@@ -214,24 +319,35 @@ async def generate(body: GenerateRequest) -> dict:
         )
         if generate_task == "text_to_video":
             reuse_images = []
+            reuse_videos = []
         else:
             reuse_images = reuse_images_from_job(src)
-            if not reuse_images:
-                raise HTTPException(400, "that job has no GCS images to reuse")
+            reuse_videos = reuse_videos_from_job(src)
+            if not reuse_images and not reuse_videos and generate_task != "text_to_video":
+                raise HTTPException(400, "that job has no GCS images or videos to reuse")
         if not prompt_text:
             prompt_text = (src.meta.get("shot_list") or "").strip()
         if not prompt_text:
             raise HTTPException(400, "reuse needs a prompt or a stored shot_list")
         client_images = []
+        client_videos = []
         urls = []
         generate_source_job_id = reuse_id
 
     if mode == "generate" and not prompt_text:
         raise HTTPException(400, "prompt is required")
+    if mode == "upscale":
+        # The live API rejects any text part on task=upscale.
+        prompt_text = ""
+    if mode in {"continue", "edit", "extend"} and not prompt_text:
+        raise HTTPException(400, "prompt is required")
 
     if mode == "generate" and generate_task == "text_to_video":
         client_images = []
+        client_videos = []
         urls = []
+    if mode == "generate" and generate_task != "reference_to_video":
+        client_videos = []
 
     if (
         mode == "generate"
@@ -239,29 +355,52 @@ async def generate(body: GenerateRequest) -> dict:
         and not reuse_id
         and not client_images
         and not urls
+        and not client_videos
     ):
-        need = "exactly two images" if generate_task == "frames_to_video" else "at least one image"
+        if generate_task == "frames_to_video":
+            need = "exactly two images"
+        elif generate_task == "reference_to_video":
+            need = "at least one image or reference video"
+        else:
+            need = "at least one image"
         raise HTTPException(
             400,
             f"{generate_task} needs {need} (upload, paste a URL, or Load example)",
         )
 
     source_video = (body.source_video_uri or "").strip() or None
+    previous_interaction_id = None
+    source_modes = {"continue", "edit", "extend", "upscale"}
 
-    if body.source_job_id and mode in {"continue", "edit", "extend"}:
+    if body.source_job_id and mode in source_modes:
         src = await job_store.get(body.source_job_id)
         if not src:
             raise HTTPException(404, f"source_job_id not found: {body.source_job_id}")
         if not source_video:
             source_video = src.video_uri
+        same_model = not src.meta.get("model") or src.meta.get("model") == model_id
+        if (
+            body.stateful
+            and profile.supports_multiturn
+            and mode != "upscale"
+            and interaction_can_chain(src.meta)
+            and src.interaction_id
+            and same_model
+        ):
+            previous_interaction_id = src.interaction_id
 
-    if mode in {"continue", "edit", "extend"} and not (
+    if mode in source_modes and not previous_interaction_id and not (
         source_video and source_video.startswith("gs://")
     ):
         raise HTTPException(
             400,
-            f"{mode} mode needs source_video_uri (gs://…) or a completed source_job_id",
+            f"{mode} needs source_video_uri (gs://…) or a completed source_job_id",
         )
+
+    edit_images = client_images if mode in {"continue", "edit", "extend"} else []
+    if mode == "upscale":
+        edit_images = []
+        client_videos = []
 
     job = await job_store.create()
     asyncio.create_task(
@@ -269,7 +408,8 @@ async def generate(body: GenerateRequest) -> dict:
             job,
             prompt=prompt_text,
             image_urls=urls if mode == "generate" else [],
-            client_images=client_images if mode == "generate" else [],
+            client_images=client_images if mode == "generate" else edit_images,
+            client_videos=client_videos if mode == "generate" else None,
             duration=body.duration,
             resolution=body.resolution,
             aspect_ratio=body.aspect_ratio,
@@ -281,7 +421,14 @@ async def generate(body: GenerateRequest) -> dict:
             source_job_id=generate_source_job_id if mode == "generate" else body.source_job_id,
             enhance_prompt=body.enhance_prompt,
             reuse_images=reuse_images if mode == "generate" else None,
+            reuse_videos=reuse_videos if mode == "generate" else None,
             generate_task=generate_task if mode == "generate" else None,
+            model=model_id,
+            seed=body.seed,
+            labels=labels or None,
+            stateful=body.stateful,
+            previous_interaction_id=previous_interaction_id,
+            profile_assumed=assumed,
         )
     )
     return job.to_dict()
@@ -450,7 +597,8 @@ async def get_job_suggestions(job_id: str) -> dict:
     if not scene_prompt:
         return {"suggestions": [], "reason": "no prompt to work from"}
 
-    allow_edit = job.duration_sec is None or job.duration_sec <= EDIT_MAX_INPUT_SEC
+    edit_limit = profile_for(job.meta.get("model")).edit_max
+    allow_edit = job.duration_sec is None or job.duration_sec <= edit_limit
     suggestions = await prompt_enhancer.suggest_followups(
         scene_prompt, allow_edit=allow_edit
     )
