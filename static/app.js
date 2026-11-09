@@ -295,7 +295,7 @@ const MODE_GUIDE = {
     steps: [
       "在右侧选一条已完成成片，或点「以此结果继续编辑」。",
       "指令要短：改光、去掉一个物体、换一件衣服。一次只改一件事。",
-      "服务端会补上 Keep everything else the same.",
+      "可选「自动润色」才会补 Keep everything else；默认原样提交。",
     ],
     note: "源片长度不能超过当前模型的编辑上限。1.2 可勾选多轮编辑，不必重传成片。不能改配音。",
     placeholder: "例：Make the lighting warmer. Keep everything else the same.",

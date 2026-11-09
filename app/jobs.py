@@ -467,7 +467,7 @@ async def run_generation_job(
     mode: str = "generate",
     source_video_uri: str | None = None,
     source_job_id: str | None = None,
-    enhance_prompt: bool = True,
+    enhance_prompt: bool = False,
     reuse_images: list[dict[str, str]] | None = None,
     reuse_videos: list[dict[str, str]] | None = None,
     client_videos: list[dict[str, str]] | None = None,
@@ -608,7 +608,7 @@ async def run_generation_job(
                 if polished["enhanced"]:
                     job.meta["prompt_original"] = edit_prompt
                     edit_prompt = polished["prompt"]
-            if api_task == "edit" and "keep everything else" not in edit_prompt.lower():
+            if api_task == "edit" and enhance_prompt and "keep everything else" not in edit_prompt.lower():
                 edit_prompt = (
                     f"{edit_prompt.rstrip('.')}. Keep everything else the same."
                 )
@@ -824,63 +824,58 @@ async def run_generation_job(
         rewritten = rewrite_video_refs(rewrite_image_refs(prompt_body, len(images)))
         spoken = extract_spoken_lines(prompt_body)
         job.meta["shot_list"] = prompt_body
-        speech = dialogue_lock(prompt_body)
-        control = build_control_prefix(
-            duration=duration_str,
-            resolution=resolution,
-            aspect_ratio=aspect_ratio,
-            generate_audio=generate_audio,
-            no_subtitles=no_subtitles,
-            no_bgm=no_bgm,
-            spoken_lines=spoken,
-        )
 
-        motion_note = ""
-        lock = ""
-        extra = ""
-        if api_task == "text_to_video":
+        # Native path: send the user's prompt (plus official <IMAGE_REF>/<VIDEO_REF>
+        # tokens). Control prefixes, dialogue locks, and motion notes are optional
+        # polish only — they must not change what the API is shown by default.
+        if not enhance_prompt:
+            job.meta["prompt_enhanced"] = False
+            job.meta["prompt_enhance_reason"] = "disabled"
+            final_prompt = rewritten
+        elif api_task == "text_to_video":
+            job.touch(JobStatus.submitting, "Polishing shot list…")
+            polished = await prompt_enhancer.enhance(rewritten, kind="generate")
+            job.meta["prompt_enhanced"] = polished["enhanced"]
+            job.meta["prompt_enhance_reason"] = polished["reason"]
             body_text = rewritten
-            if enhance_prompt:
-                job.touch(JobStatus.submitting, "Polishing shot list…")
-                polished = await prompt_enhancer.enhance(rewritten, kind="generate")
-                job.meta["prompt_enhanced"] = polished["enhanced"]
-                job.meta["prompt_enhance_reason"] = polished["reason"]
-                if polished["enhanced"]:
-                    job.meta["prompt_original"] = rewritten
-                    body_text = polished["prompt"]
-            else:
-                job.meta["prompt_enhanced"] = False
-                job.meta["prompt_enhance_reason"] = "disabled"
-            parts = [control, speech, body_text]
+            if polished["enhanced"]:
+                job.meta["prompt_original"] = rewritten
+                body_text = polished["prompt"]
+            speech = dialogue_lock(prompt_body)
+            control = build_control_prefix(
+                duration=duration_str,
+                resolution=resolution,
+                aspect_ratio=aspect_ratio,
+                generate_audio=generate_audio,
+                no_subtitles=no_subtitles,
+                no_bgm=no_bgm,
+                spoken_lines=spoken,
+            )
+            final_prompt = "\n\n".join(p for p in (control, speech, body_text) if p)
         else:
-            if enhance_prompt:
-                job.touch(JobStatus.submitting, "Writing motion notes…")
-                mot = await prompt_enhancer.motion_addendum(rewritten)
-                job.meta["prompt_enhanced"] = mot["enhanced"]
-                job.meta["prompt_enhance_reason"] = mot["reason"]
-                motion_note = mot["prompt"]
-            else:
-                job.meta["prompt_enhanced"] = False
-                job.meta["prompt_enhance_reason"] = "static motion note"
-                motion_note = prompt_enhancer.DEFAULT_MOTION_NOTE
-            if api_task == "image_to_video":
-                lock = frame_lock_prefix(len(images))
-            else:
-                lock = reference_lock_prefix(len(images), len(videos))
-                extra = (
-                    "Use the given image(s) as references for video generation. "
-                    "The images should not be used as literal initial frames."
-                    if images
-                    else ""
-                )
-            parts = [control]
-            if lock:
-                parts.append(lock)
-            parts.extend([speech, rewritten, motion_note])
-            if extra:
-                parts.append(extra)
+            job.touch(JobStatus.submitting, "Writing motion notes…")
+            mot = await prompt_enhancer.motion_addendum(rewritten)
+            job.meta["prompt_enhanced"] = mot["enhanced"]
+            job.meta["prompt_enhance_reason"] = mot["reason"]
+            speech = dialogue_lock(prompt_body)
+            control = build_control_prefix(
+                duration=duration_str,
+                resolution=resolution,
+                aspect_ratio=aspect_ratio,
+                generate_audio=generate_audio,
+                no_subtitles=no_subtitles,
+                no_bgm=no_bgm,
+                spoken_lines=spoken,
+            )
+            lock = (
+                frame_lock_prefix(len(images))
+                if api_task == "image_to_video"
+                else reference_lock_prefix(len(images), len(videos))
+            )
+            final_prompt = "\n\n".join(
+                p for p in (control, lock, speech, rewritten, mot["prompt"]) if p
+            )
 
-        final_prompt = "\n\n".join(p for p in parts if p)
         job.meta["final_prompt_preview"] = final_prompt[:4000]
 
         payload = omni_client.build_payload(

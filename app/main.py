@@ -102,7 +102,7 @@ class GenerateRequest(BaseModel):
     mode: str = Field(default="generate")
     # Omni generate task: text_to_video | image_to_video | frames_to_video | reference_to_video
     generate_task: str | None = None
-    enhance_prompt: bool = True
+    enhance_prompt: bool = False
     # Empty uses OMNI_MODEL. A known id or any custom model id is accepted.
     model: str | None = None
     seed: int | None = Field(default=None, ge=0, le=SEED_MAX)
