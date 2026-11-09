@@ -1304,7 +1304,7 @@ function renderJob(job) {
     : "该任务没有可复用的图片或分镜";
 
   const editMax = job.edit_max_sec || activeProfile().edit_max;
-  const tooLongToEdit = job.duration_sec != null && job.duration_sec > editMax + 0.5;
+  const tooLongToEdit = job.duration_sec != null && job.duration_sec > editMax + 0.05;
   for (const id of ["useForContinue", "useForEdit"]) {
     const btn = document.getElementById(id);
     btn.disabled = tooLongToEdit;

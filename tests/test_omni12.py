@@ -50,6 +50,10 @@ class PayloadTests(unittest.TestCase):
         self.assertNotIn("duration", fmt)
         self.assertNotIn("aspect_ratio", fmt)
         self.assertEqual(fmt["resolution"], "1080p")
+        self.assertNotIn(
+            "video_config",
+            payload.get("generation_config") or {},
+        )
 
     def test_extend_sends_duration_only(self):
         # Official Extend sample: duration is the append length; live rejects aspect_ratio.

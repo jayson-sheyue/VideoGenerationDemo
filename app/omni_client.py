@@ -191,7 +191,11 @@ def build_payload(
         response_format["delivery"] = "uri"
         response_format["gcs_uri"] = settings.output_gcs_uri
 
-    generation_config: dict[str, Any] = {"video_config": {"task": task}}
+    generation_config: dict[str, Any] = {}
+    # Live API: "previous_interaction_id is not allowed when video task is set."
+    # A follow-up turn continues the stored interaction and must not set task.
+    if task and not previous_interaction_id:
+        generation_config["video_config"] = {"task": task}
     if seed is not None:
         generation_config["seed"] = seed
 
@@ -199,8 +203,9 @@ def build_payload(
         "model": model or settings.omni_model,
         "input": input_items,
         "response_format": [response_format],
-        "generation_config": generation_config,
     }
+    if generation_config:
+        payload["generation_config"] = generation_config
     if store is not None:
         payload["store"] = store
     if background is not None:

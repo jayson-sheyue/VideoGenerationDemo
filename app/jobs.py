@@ -300,7 +300,7 @@ async def _submit_and_finalize(job: Job, *, payload: dict[str, Any]) -> None:
 def _done_message(job: Job) -> str:
     length = f"{job.duration_sec:g}s clip" if job.duration_sec else "Done"
     limit = _edit_limit(job)
-    if job.duration_sec and job.duration_sec > limit:
+    if job.duration_sec and job.duration_sec > limit + 0.05:
         return (
             f"Done — {length}; too long to Edit (max {limit:g}s for this model), "
             "Extend still works"

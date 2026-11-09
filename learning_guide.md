@@ -176,7 +176,7 @@ Veo 的 reference 还有 `asset` / `style` 类型且张数更少；Omni 走 Inte
 
 文档：[Edit videos](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/video/edit-videos)。
 
-多轮编辑：1.2 把上一次 `interaction.id` 放进 `previous_interaction_id`（需要 `store: true`）。**1.1 在 Agent Platform 上会拒这个字段**，所以 1.1 的 Continue 仍是新请求，把最新成片的 `gs://` 再当 `input.video`。1.2 取消「多轮编辑」时走同一条重传路径。1.2 的编辑还可以再带最多两张参考图。
+多轮编辑：1.2 把上一次 `interaction.id` 放进 `previous_interaction_id`（需要 `store: true`），**并且不能再带** `generation_config.video_config.task`。线上会直接 400：`previous_interaction_id is not allowed when video task is set`。这一轮只发新指令，不重传成片。**1.1 在 Agent Platform 上会拒这个字段**，所以 1.1 的 Continue 仍是新请求，把最新成片的 `gs://` 再当 `input.video`，并带 `task=edit`。1.2 取消「多轮编辑」时走同一条重传路径。1.2 的编辑还可以再带最多两张参考图。
 
 ### 3.5 `extend` — 续写（往后接，返回整段）
 
