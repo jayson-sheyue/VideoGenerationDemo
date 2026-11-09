@@ -147,9 +147,16 @@ function applyCapabilityChrome() {
   const chainable = profile.supports_multiturn && currentMode !== "generate" && currentMode !== "upscale";
   statefulField.hidden = !chainable;
   modelNote.textContent = profile.supports_multiturn
-    ? "1.2 为正式版：生成和编辑 3–15 秒（首尾帧仍是 3–10 秒），可多轮改同一条 Interaction，并可把不超过 15 秒的成片放大。"
-    : "1.1 Preview：生成和编辑最长 10 秒。每次编辑都重传 gs:// 成片。放大、seed、labels 和多轮 interaction 请改用 1.2。";
+    ? "1.2 正式版：生成/编辑 3–15 秒（首尾帧 3–10）；续写源片可为任意长度，单次只加 3–10 秒，成片约 ≤ 40 秒；可多轮编辑与放大。"
+    : "1.1 Preview：生成/编辑最长 10 秒；续写源片本 Demo 仍要求 ≤ 30 秒；每次编辑重传 gs://。放大、seed、labels、多轮请改用 1.2。";
   if (audioInputNote) audioInputNote.hidden = currentMode !== "generate";
+}
+
+function extendInputSummary(profile) {
+  if (profile.extend_input_max == null) {
+    return "1.2：源片可为任意长度；模型只用最后约 10 秒，拼到最后约 30 秒上，成片约 ≤ 40 秒。单次新增 3–10 秒，不是 15 秒。";
+  }
+  return `1.1 / 本 Demo：源片必须 ≤ ${profile.extend_input_max} 秒。单次新增 3–10 秒，成片约 ≤ 40 秒。要接更长源片请切到 Omni 1.2。`;
 }
 
 function parseLabels(text) {
@@ -305,10 +312,10 @@ const MODE_GUIDE = {
     task: "task=extend",
     steps: [
       "选择源视频。描述接下来几秒发生什么，不要重述原片。",
-      "Duration 是本次新增长度（3–10s）。返回的是拼接后的完整成片。",
-      "例如 8s 源片再续 8s → 得到约 16s。",
+      "Duration 是本次新增长度（3–10s，不是 15s）。返回拼接后的完整成片。",
+      "例如 8s 源片再续 8s → 约 16s。不要按 15+15+15 规划到 45s。",
     ],
-    note: "本次续写 3–10 秒，接在片尾，返回拼接后的成片。1.2 的长源片只会保留最后约 30 秒再拼接。",
+    note: "",
     placeholder: "例：Continue as they watch the interface light up and smile.",
     promptLabel: "What happens next",
     button: "Extend video",
@@ -377,7 +384,8 @@ function applyGuide() {
     li.textContent = step;
     guideSteps.appendChild(li);
   }
-  guideNote.textContent = g.note;
+  guideNote.textContent =
+    currentMode === "extend" ? extendInputSummary(activeProfile()) : g.note;
   promptLabel.textContent = g.promptLabel;
   promptEl.placeholder = g.placeholder;
   generateBtn.textContent = g.button;

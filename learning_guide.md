@@ -19,7 +19,8 @@
 | 生成 | 3–15 秒。首尾帧 3–10 秒 | 3–10 秒 |
 | 编辑输入 | ≤ 15 秒，可再加最多 2 张参考图 | ≤ 10 秒（线上实测 `Editing duration N exceeds maximum duration 10`） |
 | 多轮 | `store: true` + `previous_interaction_id`。状态约 7 天 | Agent Platform 会拒 `previous_interaction_id`，只能重传 `gs://` |
-| 续写 | 追加 3–10 秒。源片可以更长，但只使用最后约 10 秒，并拼到最后约 30 秒上 | 本 Demo 仍把输入限制在 30 秒 |
+| 续写输入 | **任意长度**（模型卡片：`extension: Any duration`）。只用最后约 10 秒做上下文 | 本 Demo **仍拦截 > 30 秒** 的源片（保守上限；1.1 卡片未单独写 Any duration） |
+| 续写输出 | 单次追加 3–10 秒，拼到源片最后约 30 秒上，成片约 ≤ **40 秒** | 单次同样 3–10 秒；成片同样约 ≤ 40 秒 |
 | 放大 | `task=upscale`，源片 ≤ 15 秒。只传源视频和目标分辨率，线上拒绝文字 | 不发送 |
 | Seed / labels | `generation_config.seed`（0–4294967295）；请求级 `labels` | 不发送 |
 | 参考视频 | 每条 prompt 最多 3 段。Gemini API 建议每段约 3 秒，声音会被忽略 | 文档同样列出，本 Demo 两种模型都可以挂 |
@@ -53,7 +54,7 @@ Preview 阶段：有固定配额，没有 Batch / Provisioned Throughput。输�
 
 - 输入最多约 131k tokens，输出约 58k tokens。
 - 图片：每条 prompt 最多 **10** 张；inline 单文件 20 MB，GCS 单文件 30 MB；`png` / `jpeg` / `webp` / `heic` / `heif`。
-- 视频输入：每条 prompt 最多 **3** 段；卡片上的「单段最长 10s」主要约束 **编辑类** 输入，续写另有 30s 上限（见第 4 节）。
+- 视频输入：每条 prompt 最多 **3** 段；卡片上的「单段最长 10s」主要约束 **编辑类** 输入。续写见第 3.5 节：1.2 输入可为任意长度，成片约 ≤ 40s。
 - 成片画幅 **16:9 / 9:16**；分辨率 **360p / 720p / 1080p / 4k**（上一代 `gemini-omni-flash-preview` 基本只有 720p）。
 - 能力开关：文生视频、图生视频、参考生视频、首尾帧、配音/音效、编辑、续写 —— 均为 Supported。不支持：生图、改图、Function calling、URL context、Chat completions。
 
@@ -180,18 +181,23 @@ Veo 的 reference 还有 `asset` / `style` 类型且张数更少；Omni 走 Inte
 
 输入：源视频 + 「接下来几秒发生什么」。模型从片尾接着演，并尽量保持人物、场景、画风。
 
-官方上限（[Extend videos](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/video/extend-videos)）：
+这是 **1.1 与 1.2 最容易讲错的差别之一**。官方依据：
 
-| | Omni Flash | Veo（对照） |
-| --- | --- | --- |
-| 源片长度 | **1–30 秒** | 1–30 秒，且常要求 24fps MP4 |
-| 单次 `duration` | **3–10 秒**（本次新增长度） | Veo 文档里有固定约 7s 等差异 |
-| 成片总长 | **最长约 40 秒** | 约 37 秒 |
+- [Extend videos](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/video/extend-videos)：Gemini Omni 可接受 **任意长度** 源片；只用最后约 10 秒生成 3–10 秒新段，并拼到源片最后约 30 秒上（成片约 ≤ 40 秒）。例如 60 秒源片再续 10 秒，出来仍约 40 秒。
+- [1.2 模型卡片](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/omni-1-2-flash)：`Maximum input video length (extension): Any duration (uses up to the last 10 seconds)`。
+- [1.1 模型卡片](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/omni-1-1-flash)：已 Deprecated，**没有**单独写 `extension: Any duration`。本 Demo 对 1.1 仍按 **源片 ≤ 30 秒** 拦截。
 
-返回的是 **拼接后的完整视频**：8s 源片再续 8s → 得到约 **16s** 文件，不是只返回新的 8s。因此：
+| | Omni 1.2 Flash | Omni 1.1（本 Demo） | Veo（对照） |
+| --- | --- | --- | --- |
+| 源片长度 | **任意长度** | **≤ 30 秒**（本 Demo 保守上限） | 1–30 秒，常要求 24fps MP4 |
+| 单次 `duration` | **3–10 秒**（本次新增） | 同样 3–10 秒 | 常约 7 秒 |
+| 成片总长 | **约 ≤ 40 秒** | 约 ≤ 40 秒 | 约 37 秒 |
 
-- 再 Edit 会失败（超过 10s）
-- 还可以继续 Extend，直到接近 40s
+返回的是 **拼接后的完整视频**：8s 源片再续 8s → 约 **16s**，不是只返回新的 8s。因此：
+
+- 超过当前模型编辑上限后再 Edit 会失败（1.2 为 15s，1.1 为 10s）
+- 还可以继续 Extend，直到接近约 40s；再续也不会稳定涨到 45s
+- **不能**按「15 + 15 + 15」理解：单次续写最多 10 秒，不是 15 秒
 
 `response_format` 实测 **只传 `duration`**。文档示例里的 `aspect_ratio` 会被线上拒绝。分辨率沿用源片，不要在 extend 请求里再塞 `resolution`。
 

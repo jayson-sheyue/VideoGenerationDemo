@@ -3,7 +3,7 @@ import unittest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.model_catalog import OMNI_11, OMNI_12, duration_bounds, normalize_labels
+from app.model_catalog import CATALOG, OMNI_11, OMNI_12, duration_bounds, normalize_labels
 from app.omni_client import build_payload, format_interaction_failure
 from app.prompt_utils import rewrite_video_refs
 
@@ -159,6 +159,14 @@ class PayloadTests(unittest.TestCase):
         self.assertFalse(interaction_can_chain({"mode": "upscale", "api_task": "upscale"}))
         self.assertTrue(interaction_can_chain({"mode": "edit", "api_task": "edit"}))
         self.assertTrue(interaction_can_chain({"mode": "generate", "api_task": "text_to_video"}))
+
+    def test_extend_input_differs_between_models(self):
+        self.assertIsNone(OMNI_12.extend_input_max)
+        self.assertEqual(OMNI_11.extend_input_max, 30)
+        flash = next(p for p in CATALOG.values() if p.id == OMNI_12.id).to_public()
+        preview = next(p for p in CATALOG.values() if p.id == OMNI_11.id).to_public()
+        self.assertIsNone(flash["extend_input_max"])
+        self.assertEqual(preview["extend_input_max"], 30)
 
     def test_reference_videos_precede_the_prompt(self):
         payload = build_payload(

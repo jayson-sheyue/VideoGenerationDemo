@@ -103,9 +103,14 @@
             <td>本 Demo 每次把最新 <code>gs://</code> 再挂回去</td>
           </tr>
           <tr>
-            <td>续写</td>
-            <td>追加 3–10 秒。源片任意长度，但只用最后约 10 秒做上下文，并拼到最后约 30 秒上</td>
-            <td>追加 3–10 秒。本 Demo 仍把输入限制在 30 秒</td>
+            <td>续写 · 源片</td>
+            <td><strong>任意长度</strong>（模型卡片 <code>extension: Any duration</code>）。只用最后约 10 秒做上下文</td>
+            <td>本 Demo <strong>仍拦截 &gt; 30 秒</strong>。1.1 卡片未单独写 Any duration，且已 Deprecated</td>
+          </tr>
+          <tr>
+            <td>续写 · 输出</td>
+            <td>单次追加 3–10 秒（不是 15 秒），拼到源片最后约 30 秒上，成片约 ≤ <strong>40 秒</strong></td>
+            <td>同样是单次 3–10 秒、成片约 ≤ 40 秒</td>
           </tr>
           <tr>
             <td>放大</td>
@@ -159,8 +164,8 @@
           <span>短指令。1.2 可加最多两张参考图。response_format 只传 resolution。</span>
         </a>
         <a class="doc-card" href="https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/video/extend-videos" target="_blank" rel="noreferrer">
-          <strong>续写</strong>
-          <span>duration 是本次新增的秒数。返回拼接后的整段。只接片尾。</span>
+          <strong>续写 · Extend videos</strong>
+          <span>1.2 源片可为任意长度；单次只加 3–10 秒，成片约 ≤ 40 秒。60s 源片再续 10s 仍约出 40s。不要按 15+15+15 规划。</span>
         </a>
         <a class="doc-card" href="https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/video/best-practice" target="_blank" rel="noreferrer">
           <strong>画幅与工作流</strong>
@@ -214,6 +219,7 @@
       <ul>
         <li>实验台右上角可换模型。自定义 ID 会原样发给接口，控件按 ID 里是否包含 1.2 来套用上限。</li>
         <li>Generate 的四种任务、Continue / Edit、Extend 都还在。1.2 的 Continue 默认走多轮 interaction；取消勾选就改回重传 <code>gs://</code>。</li>
+        <li>切到 Extend 时，实验台会按当前模型显示源片上限：1.2 为任意长度（成片约 ≤ 40 秒）；1.1 仍拦 30 秒。单次新增永远是 3–10 秒。</li>
         <li>References 可以再挂最多 3 段参考视频。编辑和续写在 1.2 上可以再挂最多 2 张参考图。</li>
         <li>Upscale 只发给 1.2。源片超过 15 秒会在提交前拦住。提示词框会藏起来，请求不带 <code>type: text</code>。</li>
         <li>Seed 和 labels 只在 1.2 上出现。labels 要用小写的 <code>key=value</code>。</li>
