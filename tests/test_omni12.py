@@ -3,7 +3,15 @@ import unittest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.model_catalog import CATALOG, OMNI_11, OMNI_12, duration_bounds, normalize_labels
+from app.model_catalog import (
+    CATALOG,
+    OMNI_11,
+    OMNI_12,
+    duration_bounds,
+    extend_live_source_message,
+    extend_source_over_live_limit,
+    normalize_labels,
+)
 from app.omni_client import OmniAPIError, build_payload, format_interaction_failure
 from app.prompt_utils import rewrite_video_refs
 
@@ -255,6 +263,14 @@ class PayloadTests(unittest.TestCase):
         preview = next(p for p in CATALOG.values() if p.id == OMNI_11.id).to_public()
         self.assertIsNone(flash["extend_input_max"])
         self.assertEqual(preview["extend_input_max"], 30)
+        self.assertEqual(flash["extend_live_source_max"], 24)
+        self.assertFalse(extend_source_over_live_limit(None))
+        self.assertFalse(extend_source_over_live_limit(20.032))
+        self.assertFalse(extend_source_over_live_limit(24.0))
+        self.assertTrue(extend_source_over_live_limit(24.06))
+        self.assertTrue(extend_source_over_live_limit(30.037))
+        self.assertIn("24", extend_live_source_message(30.037))
+        self.assertIn("30.037", extend_live_source_message(30.037))
 
     def test_reference_videos_precede_the_prompt(self):
         payload = build_payload(
@@ -435,6 +451,38 @@ class ApiTests(unittest.TestCase):
             )
             self.assertEqual(response.status_code, 400)
             self.assertIn("360p", response.json()["detail"])
+        finally:
+            job_store._jobs.pop(job.id, None)
+
+    def test_extend_rejects_a_source_past_the_live_limit(self):
+        from app.jobs import Job, JobStatus, job_store
+
+        job = Job(
+            id="src30",
+            status=JobStatus.completed,
+            video_uri="gs://bucket/thirty.mp4",
+            interaction_id="interaction-30",
+            duration_sec=30.037,
+        )
+        job.meta = {"mode": "extend", "model": OMNI_12.id, "api_task": "extend"}
+        job_store._jobs[job.id] = job
+        before = set(job_store._jobs)
+        try:
+            response = self.client.post(
+                "/api/generate",
+                json={
+                    "mode": "extend",
+                    "prompt": "the man flys to the sky",
+                    "source_job_id": job.id,
+                    "duration": 10,
+                    "model": OMNI_12.id,
+                    "stateful": True,
+                },
+            )
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("30.037", response.json()["detail"])
+            self.assertIn("24", response.json()["detail"])
+            self.assertEqual(set(job_store._jobs), before)
         finally:
             job_store._jobs.pop(job.id, None)
 

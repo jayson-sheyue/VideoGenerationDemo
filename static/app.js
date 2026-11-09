@@ -82,6 +82,7 @@ const FALLBACK_12 = {
   extend_min: 3,
   extend_max: 10,
   extend_input_max: null,
+  extend_live_source_max: 24,
   upscale_max: 15,
   reference_videos_max: 3,
   edit_reference_images_max: 2,
@@ -150,19 +151,21 @@ function profileHeadline(profile) {
     : profile.id.includes("1.2")
       ? "1.2 Flash"
       : profile.id;
+  const extendCap = extendSourceMax(profile);
   const extendIn =
-    profile.extend_input_max == null
-      ? "extend any-length in"
-      : `extend input ≤${profile.extend_input_max}s`;
+    extendCap != null
+      ? `extend ≤${extendCap}s live`
+      : "extend any-length in";
   const upscale = profile.supports_upscale ? " · upscale" : "";
   return `${name} · gen/edit ${profile.generate_min}–${profile.generate_max}s · ${extendIn} → ~40s out${upscale}`;
 }
 
 function modelNoteText(profile) {
+  const extendCap = extendSourceMax(profile);
   const extend =
-    profile.extend_input_max == null
-      ? "续写源片可为任意长度"
-      : `续写源片要求 ≤ ${profile.extend_input_max} 秒`;
+    extendCap != null
+      ? `官方写续写任意长度，当前线上超过约 ${extendCap} 秒会失败，提交前拦住`
+      : "续写源片可为任意长度";
   const refs = profile.edit_reference_images_max
     ? `编辑可附最多 ${profile.edit_reference_images_max} 张参考图。`
     : "编辑不接受参考图。";
@@ -303,17 +306,31 @@ function editGuideNote(profile) {
   return `不能改配音或台词。当前模型最长编辑 ${profile.edit_max} 秒。${chain}${refs}`;
 }
 
+function extendSourceMax(profile) {
+  const caps = [profile.extend_live_source_max, profile.extend_input_max].filter(
+    (value) => value != null
+  );
+  if (!caps.length) return null;
+  return Math.min(...caps);
+}
+
 function extendInputSummary(profile) {
-  if (profile.extend_input_max == null) {
+  const live = extendSourceMax(profile);
+  if (live != null) {
+    const official =
+      profile.extend_input_max == null
+        ? "官方文档写源片任意长度。"
+        : `本 Demo 对当前模型的文档上限是 ${profile.extend_input_max} 秒。`;
     return (
-      "1.2：源片可为任意长度（官方合同，Demo 不裁短）。模型只「看」最后约 10 秒当上下文；" +
-      "成片里只「留」源片最后约 30 秒再接上新的 3–10 秒（不是 15 秒），总长约 ≤ 40 秒。更早的画面会被裁掉。" +
-      "Duration 写入 response_format，表示本次追加秒数。"
+      `${official}模型只看最后约 10 秒，成片保留最后约 30 秒再接 ` +
+      `${profile.extend_min}–${profile.extend_max} 秒，总长约 ≤ 40 秒。` +
+      `当前线上超过约 ${live} 秒会在生成阶段返回 Internal error，实验台会在提交前拦住。` +
+      "Duration 是本次追加秒数。"
     );
   }
   return (
-    `1.1 / 本 Demo：源片必须 ≤ ${profile.extend_input_max} 秒。` +
-    "单次新增 3–10 秒；成片约 ≤ 40 秒（末约 30 秒源片 + 新段）。要接更长源片请切到 Omni 1.2。"
+    `源片必须 ≤ ${profile.extend_input_max} 秒。` +
+    "单次新增 3–10 秒；成片约 ≤ 40 秒（末约 30 秒源片 + 新段）。"
   );
 }
 
@@ -1113,7 +1130,7 @@ async function applyModeExample(mode, index) {
   const profile = activeProfile();
   const maxSeconds =
     mode === "extend"
-      ? profile.extend_input_max
+      ? extendSourceMax(profile)
       : mode === "upscale"
         ? profile.upscale_max
         : profile.edit_max;
@@ -1416,6 +1433,14 @@ function renderJob(job) {
       : noUpscaleTarget
         ? `${sourceRes} 不能再放大。官方不支持 1080p → 4k`
         : "用 task=upscale 提高到更高分辨率。不能写提示词，也不能改内容";
+  const extendBtn = document.getElementById("useForExtend");
+  const extendMax = extendSourceMax(activeProfile());
+  const tooLongToExtend =
+    extendMax != null && job.duration_sec != null && job.duration_sec > extendMax + 0.05;
+  extendBtn.disabled = tooLongToExtend;
+  extendBtn.title = tooLongToExtend
+    ? `这条 ${job.duration_sec}s。官方写任意长度，当前线上超过约 ${extendMax}s 会 Internal error`
+    : "在片尾再接 3–10 秒";
 
   if (job.status === "completed" && job.video_url) {
     showVideo(job.video_url);
@@ -1714,6 +1739,20 @@ async function submitJob() {
     };
     if (currentMode === "upscale" && !base.resolution) {
       throw new Error("这条片子没有可放大的目标。官方不支持 1080p → 4k。");
+    }
+    if (currentMode === "extend") {
+      const extendMax = extendSourceMax(activeProfile());
+      const sourceUri = sourceVideoUriEl.value.trim();
+      const sourceId = sourceJobIdEl.value.trim();
+      const known =
+        selectedJob &&
+        selectedJob.duration_sec != null &&
+        (selectedJob.id === sourceId || selectedJob.video_uri === sourceUri);
+      if (extendMax != null && known && selectedJob.duration_sec > extendMax + 0.05) {
+        throw new Error(
+          `这条片子 ${selectedJob.duration_sec} 秒。官方写任意长度，当前线上超过约 ${extendMax} 秒会返回 Internal error。请改用 ${extendMax} 秒以内的成片。`
+        );
+      }
     }
 
     if (currentMode === "generate") {

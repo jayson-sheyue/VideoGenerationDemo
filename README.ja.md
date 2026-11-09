@@ -15,7 +15,7 @@
 | **Generate → First + last** | `image_to_video` | 2 枚の間を補間 |
 | **Generate → References** | `reference_to_video` | 参照画像最大 10、参照動画最大 3 |
 | **Continue / Edit** | `edit` | 1.2 は多轮が既定。1.1 は毎回 `gs://` を再送 |
-| **Extend** | `extend` | 3–10 秒を末尾に追加し結合クリップを返す。**1.2 の入力は任意長**、**本 Demo の 1.1 は ≤ 30 秒**。出力はおよそ ≤ **40 秒** |
+| **Extend** | `extend` | 3–10 秒を末尾に追加し結合クリップを返す。公式は任意長。**ライブ API は約 24 秒を超えると失敗**し、本 Demo は送信前に拒否する。出力はおよそ ≤ **40 秒** |
 | **Upscale** | `upscale` | 1.2 のみ。15 秒以内のクリップを高解像度化。テキスト不可 |
 
 ### Extend：1.1 と 1.2 の重要差
@@ -24,7 +24,7 @@
 
 | | 1.2 | 1.1（本 Demo） |
 | --- | --- | --- |
-| 入力 | **任意長** | **≤ 30 秒** で遮断 |
+| 入力 | 公式は**任意長**。ライブは約 **24 秒**超で失敗し、送信前に拒否 | 同じライブ **24 秒**（従来の 30 秒上限より厳しい） |
 | **見る**（約 10 秒） | 次の展開を決める**文脈**として末尾約 10 秒だけ使う | 同様 |
 | **残す**（約 30 秒） | 出力はソース末尾約 30 秒 + 新セグメント。それより前は切り捨て | 同様 |
 | 1 回の追加 | **3–10 秒**（15 秒ではない） | 同じ |
@@ -56,7 +56,7 @@ PROJECT_ID=your-gcp-project BUCKET=your-gcs-bucket ./deploy/cloud-run.sh
 
 - 非同期ジョブとして扱うこと。
 - 音声ファイル入力なし。台詞編集不可。
-- Extend は公式どおり：**入力は任意長**。`response_format.duration` が今回の追加秒数（3–10）。`aspect_ratio` はライブで拒否されるため送らない。長いソースを Demo 側で切り詰めない。
+- Extend のリクエストは公式どおり：動画 + `task=extend`、`response_format.duration` が今回の追加秒数（3–10）。`aspect_ratio` は送らない。約 **24 秒**を超えるソースは送信前に拒否し、ファイルは切らない。
 - 多輪 `previous_interaction_id` は Continue / Edit のみ。そのターンは `video_config.task` を送らない。Extend と Upscale は常に `gs://` と `task` を再送する。
 - Upscale はテキスト不可。解像度は 360p→720p/1080p、720p→1080p/4k。1080p→4k は不可。Upscale 後の Edit/Extend は `gs://` を再送。
 - 失敗時は Omni の `errors` 原文を `message` に出す。
