@@ -11,6 +11,9 @@ const player = document.getElementById("player");
 const stageEmpty = document.getElementById("stageEmpty");
 const jobListEl = document.getElementById("jobList");
 const healthEl = document.getElementById("health");
+const brandSubEl = document.getElementById("brandSub");
+const stageEmptyCopyEl = document.getElementById("stageEmptyCopy");
+const advancedHintEl = document.getElementById("advancedHint");
 const guideTitle = document.getElementById("guideTitle");
 const guideTask = document.getElementById("guideTask");
 const guideSteps = document.getElementById("guideSteps");
@@ -134,22 +137,94 @@ function applyDurationForMode() {
   }
 }
 
+let healthState = { ok: false, proxy: "", offline: false };
+
+function profileHeadline(profile) {
+  const name = profile.id.includes("1.1")
+    ? "1.1 Preview"
+    : profile.id.includes("1.2")
+      ? "1.2 Flash"
+      : profile.id;
+  const extendIn =
+    profile.extend_input_max == null
+      ? "extend any-length in"
+      : `extend input ≤${profile.extend_input_max}s`;
+  const upscale = profile.supports_upscale ? " · upscale" : "";
+  return `${name} · gen/edit ${profile.generate_min}–${profile.generate_max}s · ${extendIn} → ~40s out${upscale}`;
+}
+
+function modelNoteText(profile) {
+  const extend =
+    profile.extend_input_max == null
+      ? "续写源片可为任意长度"
+      : `续写源片要求 ≤ ${profile.extend_input_max} 秒`;
+  const refs = profile.edit_reference_images_max
+    ? `编辑可附最多 ${profile.edit_reference_images_max} 张参考图。`
+    : "编辑不接受参考图。";
+  const extras = [
+    profile.supports_multiturn ? "可多轮编辑" : "每次编辑重传 gs://",
+    profile.supports_upscale ? "可单独放大" : "无单独放大",
+    profile.supports_seed ? "可发送 seed / labels" : "不发送 seed / labels",
+  ].join("，");
+  return (
+    `${profile.label || profile.id}：生成 ${profile.generate_min}–${profile.generate_max} 秒` +
+    `（首尾帧最长 ${profile.frames_max}），编辑最长 ${profile.edit_max} 秒。` +
+    `${extend}，单次只加 ${profile.extend_min}–${profile.extend_max} 秒，成片约 ≤ 40 秒。${refs}${extras}。`
+  );
+}
+
+function paintHealth() {
+  if (!healthEl) return;
+  if (healthState.offline) {
+    healthEl.textContent = "Server offline";
+    healthEl.className = "health bad";
+    return;
+  }
+  if (!healthState.ok) {
+    healthEl.textContent = "Set GOOGLE_CLOUD_PROJECT in .env";
+    healthEl.className = "health bad";
+    return;
+  }
+  healthEl.textContent = `GCP ready · ${selectedModelId()}${healthState.proxy}`;
+  healthEl.className = "health ok";
+}
+
 function applyCapabilityChrome() {
   const profile = activeProfile();
   customModelField.hidden = modelSelect.value !== "custom";
   const upscaleBtn = document.querySelector('#modeTabs [data-mode="upscale"]');
   if (upscaleBtn) {
     upscaleBtn.disabled = !profile.supports_upscale;
-    upscaleBtn.title = profile.supports_upscale ? "" : "单独放大只在 Omni 1.2";
+    upscaleBtn.title = profile.supports_upscale ? "" : "当前模型没有单独放大";
   }
   seedField.hidden = !profile.supports_seed;
   labelsField.hidden = !profile.supports_labels;
   const chainable = profile.supports_multiturn && currentMode !== "generate" && currentMode !== "upscale";
   statefulField.hidden = !chainable;
-  modelNote.textContent = profile.supports_multiturn
-    ? "1.2 正式版：生成/编辑 3–15 秒（首尾帧 3–10）；续写源片可为任意长度，单次只加 3–10 秒，成片约 ≤ 40 秒；可多轮编辑与放大。"
-    : "1.1 Preview：生成/编辑最长 10 秒；续写源片本 Demo 仍要求 ≤ 30 秒；每次编辑重传 gs://。放大、seed、labels、多轮请改用 1.2。";
+  modelNote.textContent = modelNoteText(profile);
+  if (brandSubEl) brandSubEl.textContent = profileHeadline(profile);
+  if (advancedHintEl) {
+    advancedHintEl.textContent = profile.supports_seed
+      ? "Seed 与 labels 会随本次请求发送。多轮编辑需要上一条任务的 interaction id，服务端大约保留 7 天。"
+      : "当前模型不发送 seed、labels，也不支持多轮 interaction。编辑和续写都会重传 gs:// 源片。";
+  }
+  if (stageEmptyCopyEl) {
+    stageEmptyCopyEl.textContent = profile.supports_upscale
+      ? "先选模型，再选文生 / 首帧 / 首尾帧 / 参考。成片之后可以继续编辑、续写，或把 360p / 720p 草稿放大。"
+      : "先选模型，再选文生 / 首帧 / 首尾帧 / 参考。成片之后可以继续编辑或续写。当前模型没有单独放大。";
+  }
+  paintHealth();
   if (audioInputNote) audioInputNote.hidden = currentMode !== "generate";
+}
+
+function editGuideNote(profile) {
+  const chain = profile.supports_multiturn
+    ? "可勾选多轮编辑，不必重传成片。"
+    : "每次编辑重传 gs://。";
+  const refs = profile.edit_reference_images_max
+    ? `可附最多 ${profile.edit_reference_images_max} 张参考图。`
+    : "不接受参考图。";
+  return `不能改配音或台词。当前模型最长编辑 ${profile.edit_max} 秒。${chain}${refs}`;
 }
 
 function extendInputSummary(profile) {
@@ -393,7 +468,11 @@ function applyGuide() {
     guideSteps.appendChild(li);
   }
   guideNote.textContent =
-    currentMode === "extend" ? extendInputSummary(activeProfile()) : g.note;
+    currentMode === "extend"
+      ? extendInputSummary(activeProfile())
+      : currentMode === "continue" || currentMode === "edit"
+        ? editGuideNote(activeProfile())
+        : g.note;
   promptLabel.textContent = g.promptLabel;
   promptEl.placeholder = g.placeholder;
   generateBtn.textContent = g.button;
@@ -886,16 +965,14 @@ async function loadHealth() {
     }
     setMode(currentMode);
     if (data.project_configured) {
-      const proxy = data.active_proxy ? " · proxy on" : " · no proxy";
-      healthEl.textContent = `GCP ready · ${selectedModelId()}${proxy}`;
-      healthEl.className = "health ok";
+      healthState = { ok: true, proxy: data.active_proxy ? " · proxy on" : " · no proxy", offline: false };
     } else {
-      healthEl.textContent = "Set GOOGLE_CLOUD_PROJECT in .env";
-      healthEl.className = "health bad";
+      healthState = { ok: false, proxy: "", offline: false };
     }
+    paintHealth();
   } catch {
-    healthEl.textContent = "Server offline";
-    healthEl.className = "health bad";
+    healthState = { ok: false, proxy: "", offline: true };
+    paintHealth();
   }
 }
 
@@ -1240,9 +1317,11 @@ function renderJob(job) {
     activeProfile().supports_upscale &&
     (job.duration_sec == null || job.duration_sec <= 15.5);
   upscaleBtn.disabled = !canUpscale;
-  upscaleBtn.title = canUpscale
-    ? "用 Omni 1.2 的 task=upscale 提高到更高分辨率。不能写提示词，也不能改内容"
-    : "放大要求源片不超过 15 秒";
+  upscaleBtn.title = !activeProfile().supports_upscale
+    ? "当前模型没有单独放大"
+    : canUpscale
+      ? "用 task=upscale 提高到更高分辨率。不能写提示词，也不能改内容"
+      : "放大要求源片不超过 15 秒";
 
   if (job.status === "completed" && job.video_url) {
     showVideo(job.video_url);
