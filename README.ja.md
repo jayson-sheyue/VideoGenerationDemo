@@ -56,10 +56,9 @@ PROJECT_ID=your-gcp-project BUCKET=your-gcs-bucket ./deploy/cloud-run.sh
 
 - 非同期ジョブとして扱うこと。
 - 音声ファイル入力なし。台詞編集不可。
-- Extend の `response_format` は **resolution のみ**（`duration` / `aspect_ratio` は 1.2 GA で Internal error になりやすい）。追加秒数はプロンプトへ（`Extend by Ns.`）。
+- Extend は公式どおり：**入力は任意長**。`response_format.duration` が今回の追加秒数（3–10）。`aspect_ratio` はライブで拒否されるため送らない。長いソースを Demo 側で切り詰めない。
 - Upscale はテキスト不可。Upscale 後の Edit/Extend は `gs://` を再送。
 - 失敗時は Omni の `errors` 原文を `message` に出す。
-- 素材サイトの **fragmented / CMAF MP4**（`iso5` + `moof`、`mvhd.duration=0`）は Omni で `invalid_request: Internal error encountered.` になりやすい。本 Demo は edit / extend / upscale 前に progressive へ remux し、成功時 meta に `source_remuxed: true` が出る。
-- 本番 1.2 の **extend** は長めの progressive 源で Internal error になりやすい（ドキュメントは任意長；実測 25s/末 24s 失敗、末 20s 成功）。本 Demo は末尾 **20 秒**に切り出す（`source_trimmed: true`）。
+- 素材の **fragmented / CMAF MP4** は progressive に remux（長さは変えない）。meta に `source_remuxed: true` が出ることがある。
 
 詳細は [learning_guide.md](./learning_guide.md) を参照。

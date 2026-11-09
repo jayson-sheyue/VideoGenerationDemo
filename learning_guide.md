@@ -205,15 +205,11 @@ Veo 的 reference 还有 `asset` / `style` 类型且张数更少；Omni 走 Inte
 - 还可以继续 Extend，直到接近约 40s；再续也不会稳定涨到 45s
 - **不能**按「15 + 15 + 15」理解：单次续写最多 10 秒，不是 15 秒
 
-`response_format` 实测 **只传 `resolution`**（与 edit/upscale 相同）。文档示例里的 `aspect_ratio` / `duration` 在 1.2 GA 线上常触发含糊的 `invalid_request: Internal error` 或 `recitation`；续写秒数改写进提示词（`Extend by Ns. …`）。
+`response_format` 按官方 Extend 示例传 **`duration`（本次追加 3–10 秒）**。文档里的 `aspect_ratio` 线上会拒，本 Demo 不传。分辨率沿用源片，不在 extend 请求里再塞 `resolution`。
 
 提示词应写 **片尾之后** 的动作/运镜/环境变化，不要把原片再描述一遍，也不要新开无关场景或第二个主角。
 
-**源片容器与时长（线上实测，文档可能不一致）**：
-
-1. 素材站 MP4 常为 **fragmented / CMAF（iso5 + moof）**，`mvhd` 时长为 0 → remux 成 progressive。
-2. 即便已 remux，**源片偏长** 的 extend 仍常报 `Internal error`（官方写 Any duration；同片实测 25s/末 24s 失败、末 20s 成功）。本 Demo 续写前会自动裁到**最后 20 秒**；meta 可见 `source_trimmed: true`。
-3. extend 的 `response_format` 只传 `resolution`；秒数写进提示词。
+**源片**：官方合同为 **任意长度**。本 Demo **不**为规避线上问题而裁短源片。仅对素材站常见的 fragmented / CMAF（`mvhd` 时长为 0）做 progressive remux（容器卫生，不改变片长）。若完整长片仍返回含糊的 `Internal error`，按上游问题如实展示，不在 Demo 层改写能力边界。
 
 ---
 
@@ -226,7 +222,7 @@ API 对「这个 task 不该出现的字段」是直接 4xx，而不是忽略。
 | `text_to_video` / `image_to_video` / `reference_to_video` | ✓ | ✓ | ✓（1.2 为 3s–15s；首尾帧 3s–10s；1.1 为 3s–10s） | 推荐 |
 | `edit` | ✕ | ✓ | ✕（跟源片） | 推荐 |
 | `upscale`（仅 1.2） | ✕ | ✓（目标分辨率） | ✕ | 推荐 |
-| `extend` | ✕ | ✓（输出分辨率） | ✕（文档有；线上改用提示词 `Extend by Ns.`） | 推荐 |
+| `extend` | ✕（文档有、线上拒） | ✕ | ✓（本次续写 3s–10s） | 推荐 |
 
 画幅取值：`16:9`、`9:16`。分辨率：`360p`、`720p`、`1080p`、`4k`。时长字符串必须带 `s`，例如 `"8s"`。
 

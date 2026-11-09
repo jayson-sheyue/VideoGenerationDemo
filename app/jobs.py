@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import re
 import traceback
 import uuid
 from dataclasses import dataclass, field
@@ -14,7 +13,6 @@ from app import omni_client, prompt_enhancer
 from app.config import OUTPUT_DIR, gcs_prefix_for_inputs, settings
 from app.model_catalog import ModelProfile, profile_for
 from app.gcs_util import (
-    EXTEND_SOURCE_MAX_SEC,
     mvhd_duration_sec,
     build_input_object_uri,
     ensure_omni_source_mp4,
@@ -526,11 +524,8 @@ async def run_generation_job(
                 )
 
             source_seconds = None
-            source_prep_meta: dict[str, Any] = {}
-            # Edit/extend/upscale need a progressive MP4. Stock CMAF/fMP4 downloads
-            # often have mvhd.duration=0 and trigger Omni "Internal error".
-            # Extend additionally trims to the last ~24s — live 1.2 Internal-errors
-            # on longer progressive sources despite "any duration" docs.
+            # Remux fragmented stock MP4s only (container hygiene). Do not trim
+            # extend inputs — official 1.2 contract is any source duration.
             if (
                 source_video_uri
                 and source_video_uri.startswith("gs://")
@@ -538,16 +533,13 @@ async def run_generation_job(
             ):
                 job.touch(
                     JobStatus.submitting,
-                    "Checking source clip (remux / trim for Omni if needed)…",
+                    "Checking source clip (remux fragmented MP4 if needed)…",
                 )
                 source_video_uri, source_seconds, source_prep_meta = (
                     await asyncio.to_thread(
                         ensure_omni_source_mp4,
                         source_video_uri,
                         job_id=job.id,
-                        max_tail_sec=(
-                            EXTEND_SOURCE_MAX_SEC if api_task == "extend" else None
-                        ),
                     )
                 )
                 job.source_video_uri = source_video_uri
@@ -575,20 +567,15 @@ async def run_generation_job(
                     f"Source clip is {source_seconds:g}s but {api_task} on {model_id} "
                     f"accepts at most {limit:g}s."
                 )
-            if api_task == "extend" and source_prep_meta.get("source_trimmed"):
-                job.meta["extend_note"] = (
-                    f"Live Omni 1.2 fails on sources longer than ~{EXTEND_SOURCE_MAX_SEC:g}s "
-                    f"with Internal error; trimmed to the last {EXTEND_SOURCE_MAX_SEC:g}s "
-                    "before extend (docs still say any length)."
-                )
-            elif (
+            if (
                 api_task == "extend"
                 and source_seconds is not None
                 and source_seconds > 30
             ):
                 job.meta["extend_note"] = (
-                    "Input is longer than 30s. Omni keeps up to the last 30s "
-                    "and appends the new segment (about 40s out)."
+                    "Official contract: any input length. Model uses the last ~10s "
+                    "as context and keeps up to the last ~30s in the output "
+                    "(about ≤40s out)."
                 )
 
             edit_images: list[dict[str, str]] = []
@@ -621,16 +608,6 @@ async def run_generation_job(
                 if polished["enhanced"]:
                     job.meta["prompt_original"] = edit_prompt
                     edit_prompt = polished["prompt"]
-            # Live extend rejects response_format.duration (opaque Internal error /
-            # recitation). Keep the UI duration by prefixing the prompt instead.
-            if api_task == "extend":
-                extend_secs = int(duration)
-                if not re.search(
-                    rf"(?i)\bextend(?:ing)?\s+by\s+{extend_secs}\s*s(?:ec(?:ond)?s?)?\b",
-                    edit_prompt,
-                ):
-                    edit_prompt = f"Extend by {extend_secs} seconds. {edit_prompt}"
-                job.meta["extend_duration_via"] = "prompt"
             if api_task == "edit" and "keep everything else" not in edit_prompt.lower():
                 edit_prompt = (
                     f"{edit_prompt.rstrip('.')}. Keep everything else the same."
@@ -644,10 +621,6 @@ async def run_generation_job(
             if api_task == "upscale":
                 job.meta["upscale_note"] = (
                     "No text was sent. Upscale takes the source video and a higher resolution only."
-                )
-            if api_task == "extend":
-                job.meta["extend_note_format"] = (
-                    "response_format sends resolution only; append length is in the prompt."
                 )
             job.meta["image_count"] = len(edit_images)
             payload = omni_client.build_payload(

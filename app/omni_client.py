@@ -146,12 +146,12 @@ def build_payload(
     videos: extra reference clips (not the edit/extend/upscale source)
     video:  source clip for edit / extend / upscale
 
-    response_format is trimmed per task. The live API rejects fields a task
-    does not accept:
-      edit / upscale / extend — resolution only
-      (Docs still show duration/aspect_ratio for extend; on 1.2 GA those
-      fields commonly fail with opaque invalid_request / Internal error.
-      Put the append length in the prompt, e.g. "Extend by 8 seconds. …")
+    response_format is trimmed per task to match the official Interactions
+    samples and live field acceptance:
+      edit / upscale — resolution only
+      extend — duration only (append length 3s–10s; aspect_ratio is in some
+        docs but the live API rejects it)
+      generate — aspect_ratio + resolution + duration
     """
     images = images or []
     videos = videos or []
@@ -176,8 +176,12 @@ def build_payload(
         input_items.append({"type": "text", "text": prompt})
 
     response_format: dict[str, Any] = {"type": "video"}
-    if task in {"edit", "upscale", "extend"}:
+    if task in {"edit", "upscale"}:
         response_format["resolution"] = resolution
+    elif task == "extend":
+        # Official Extend docs: duration is the append length. Do not invent
+        # prompt-side duration or pre-trim the source — 1.2 accepts any length.
+        response_format["duration"] = duration
     else:
         response_format["aspect_ratio"] = aspect_ratio
         response_format["resolution"] = resolution

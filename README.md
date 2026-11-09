@@ -89,11 +89,10 @@ Optional: `REGION`, `SERVICE`, `OMNI_MODEL`, `ALLOW_UNAUTHENTICATED=false`. The 
 - Slow generations—treat as async jobs.
 - No Veo-style `generate_audio` flag; dialogue is prompt-locked.
 - Voice / dialogue content cannot be edited; picture edits can.
-- Extend `response_format` must send **resolution only** (live 1.2 rejects `duration` / `aspect_ratio` with opaque Internal error); append length goes in the prompt (`Extend by Ns.`).
+- Extend follows the official contract: **any-length** source; `response_format.duration` is the append length (3–10s). Live rejects `aspect_ratio` on extend — this demo does not send it. The demo does **not** pre-trim long sources.
 - Upscale rejects any text part.
 - After upscale, Edit / Extend must re-send `gs://`.
 - Failed Omni interactions surface the API `errors` text in the job message.
-- Stock / CMAF **fragmented MP4** inputs (`iso5` + `moof`, `mvhd.duration=0`) often make Omni return `invalid_request: Internal error encountered.` Edit / extend / upscale remux those to progressive faststart before submit; job meta may show `source_remuxed: true`.
-- Live Omni 1.2 **extend** also Internal-errors on progressive sources that are too long (docs still say any length; measured fail at 25s / last-24s, success at last-20s). This demo trims to the last **20s** (`source_trimmed: true`).
+- Stock / CMAF **fragmented MP4** inputs (`iso5` + `moof`, `mvhd.duration=0`) are remuxed to progressive faststart (same duration) so the container is readable; meta may show `source_remuxed: true`.
 
 See [learning_guide.md](./learning_guide.md) for the full task matrix.

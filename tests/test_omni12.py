@@ -51,11 +51,10 @@ class PayloadTests(unittest.TestCase):
         self.assertNotIn("aspect_ratio", fmt)
         self.assertEqual(fmt["resolution"], "1080p")
 
-    def test_extend_sends_resolution_only(self):
-        # Live 1.2 rejects response_format.duration on extend (Internal error /
-        # recitation). GenMedia / verified calls use resolution only.
+    def test_extend_sends_duration_only(self):
+        # Official Extend sample: duration is the append length; live rejects aspect_ratio.
         payload = build_payload(
-            prompt="Extend by 6 seconds. Continue as she smiles.",
+            prompt="Continue as she smiles.",
             duration="6s",
             resolution="720p",
             aspect_ratio="9:16",
@@ -64,8 +63,8 @@ class PayloadTests(unittest.TestCase):
             video={"mime_type": "video/mp4", "uri": "gs://bucket/clip.mp4"},
         )
         fmt = payload["response_format"][0]
-        self.assertEqual(fmt["resolution"], "720p")
-        self.assertNotIn("duration", fmt)
+        self.assertEqual(fmt["duration"], "6s")
+        self.assertNotIn("resolution", fmt)
         self.assertNotIn("aspect_ratio", fmt)
         self.assertEqual(payload["input"][0]["type"], "video")
 
@@ -197,13 +196,6 @@ class PayloadTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             normalize_labels({"Bad Key": "x"})
 
-    def test_extend_source_max_is_under_live_internal_error(self):
-        from app.gcs_util import EXTEND_SOURCE_MAX_SEC
-
-        # Empirically last-24s still Internal-errors; last-20s succeeds.
-        self.assertLessEqual(EXTEND_SOURCE_MAX_SEC, 20.0)
-        self.assertGreaterEqual(EXTEND_SOURCE_MAX_SEC, 15.0)
-
     def test_fragmented_mp4_needs_remux(self):
         from app.gcs_util import mp4_is_fragmented, mp4_needs_remux, mvhd_duration_sec
 
@@ -238,45 +230,6 @@ class PayloadTests(unittest.TestCase):
         self.assertAlmostEqual(mvhd_duration_sec(progressive) or 0, 10.0)
         self.assertFalse(mp4_is_fragmented(progressive))
         self.assertFalse(mp4_needs_remux(progressive))
-
-    def test_trim_mp4_tail_shortens_duration(self):
-        import subprocess
-        import tempfile
-        from pathlib import Path
-
-        import imageio_ffmpeg
-
-        from app.gcs_util import mvhd_duration_sec, trim_mp4_tail
-
-        ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
-        with tempfile.TemporaryDirectory() as tmp:
-            src = Path(tmp) / "long.mp4"
-            out = Path(tmp) / "tail.mp4"
-            make = subprocess.run(
-                [
-                    ffmpeg,
-                    "-y",
-                    "-hide_banner",
-                    "-loglevel",
-                    "error",
-                    "-f",
-                    "lavfi",
-                    "-i",
-                    "color=c=black:s=160x160:d=3",
-                    "-c:v",
-                    "libx264",
-                    "-pix_fmt",
-                    "yuv420p",
-                    str(src),
-                ],
-                capture_output=True,
-                text=True,
-            )
-            self.assertEqual(make.returncode, 0, make.stderr)
-            trim_mp4_tail(src, out, keep_sec=1.0)
-            dur = mvhd_duration_sec(out.read_bytes()[:65536])
-            self.assertIsNotNone(dur)
-            self.assertLessEqual(dur or 99, 1.25)
 
     def test_remux_to_progressive_restores_mvhd_duration(self):
         """Lossless remux must leave a readable non-zero mvhd (Omni source gate)."""

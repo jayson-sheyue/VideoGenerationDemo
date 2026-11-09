@@ -200,13 +200,12 @@ learning_guide.md        Omni 能力与提示词
 - 生成慢，请当异步任务用，不要把 HTTP 超时设太短。
 - 对白靠提示词约束；Omni **没有** Veo 那种独立的 `generate_audio` 字段。打开「Generate dialogue」类措辞容易多出旁白，本 Demo 会按分镜里的引号锁台词。
 - 当前 API **不支持改配音 / 改对白内容**（画面编辑可以）。
-- 文档里 extend 的 `response_format` 写了 `aspect_ratio` / `duration`，**1.2 GA 线上常拒或 Internal error**；本仓库只传 `resolution`，续写秒数写进提示词（`Extend by Ns.`）。
+- 续写按官方：**源片任意长度**；`response_format.duration` 为本次追加 3–10 秒。文档里的 `aspect_ratio` 线上会拒，本 Demo 不传。**不会**为规避错误而裁短源片。
 - 编辑过长视频会返回 `Editing duration N exceeds maximum duration …`。1.1 的上限是 10 秒，1.2 的模型卡片是 15 秒。
 - 音频参考没有入口。模型卡片写 Audio 输入不支持；Cloud 博客写明需 allowlist。
 - 放大请求使用 `task=upscale`，input 只有源视频。带文字会返回 `Text input is not supported for upscale task`。
 - 放大之后的 Edit / Extend 不能再用 `previous_interaction_id` 接着改，必须重传成片的 `gs://`。
 - Omni 返回 `status=failed` 时，任务的 `message` 会带上接口 `errors` 原文（例如 `prohibited_content`），不再只写一句 `Omni interaction failed`。
-- 素材站常见的 **fragmented / CMAF MP4**（`iso5` + `moof`，`mvhd` 时长为 0）容易触发 Omni 的 `invalid_request: Internal error encountered.`。本 Demo 在 edit / extend / upscale 前提交前会 remux 成 progressive；成功时可在 meta 看到 `source_remuxed: true`。
-- 线上 1.2 **续写**对偏长 progressive 源片仍常 Internal error（文档写任意长度；实测 25s/末 24s 失败、末 20s 成功）。本 Demo 会裁到最后 **20 秒**（`source_trimmed: true`）。
+- 素材站常见的 **fragmented / CMAF MP4**（`iso5` + `moof`，`mvhd` 时长为 0）会 remux 成 progressive（片长不变），meta 可见 `source_remuxed: true`。
 
 更完整的模型能力表、提示词模式、以及本 Demo 未覆盖的 API，见 [learning_guide.md](./learning_guide.md)。
