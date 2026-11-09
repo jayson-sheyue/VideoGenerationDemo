@@ -154,6 +154,40 @@ def profile_for(model_id: str | None) -> ModelProfile:
     return profile
 
 
+# Official upscale page: 360p → 720p/1080p, 720p → 1080p/4k.
+# 1080p → 4k is explicitly unsupported, and a target must be higher than the source.
+UPSCALE_TARGETS: dict[str, tuple[str, ...]] = {
+    "360p": ("720p", "1080p"),
+    "720p": ("1080p", "4k"),
+    "1080p": (),
+    "4k": (),
+}
+
+
+def upscale_targets(source_resolution: str | None) -> tuple[str, ...] | None:
+    """Legal upscale targets.
+
+    None means the source resolution is unknown, so the caller must not invent a block.
+    An empty tuple means this source has no legal target.
+    """
+    if not source_resolution:
+        return None
+    return UPSCALE_TARGETS.get(source_resolution, ())
+
+
+def resolution_label(width: int, height: int) -> str | None:
+    short = min(width, height)
+    if short <= 0:
+        return None
+    if short <= 480:
+        return "360p"
+    if short <= 800:
+        return "720p"
+    if short <= 1200:
+        return "1080p"
+    return "4k"
+
+
 def duration_bounds(profile: ModelProfile, *, mode: str, generate_task: str | None) -> tuple[int, int]:
     if mode == "extend":
         return profile.extend_min, profile.extend_max

@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.model_catalog import CATALOG, OMNI_11, OMNI_12, duration_bounds, normalize_labels
-from app.omni_client import build_payload, format_interaction_failure
+from app.omni_client import OmniAPIError, build_payload, format_interaction_failure
 from app.prompt_utils import rewrite_video_refs
 
 
@@ -71,6 +71,48 @@ class PayloadTests(unittest.TestCase):
         self.assertNotIn("resolution", fmt)
         self.assertNotIn("aspect_ratio", fmt)
         self.assertEqual(payload["input"][0]["type"], "video")
+        self.assertEqual(payload["generation_config"]["video_config"]["task"], "extend")
+
+    def test_extend_keeps_task_and_drops_a_chained_id(self):
+        payload = build_payload(
+            prompt="Continue as she smiles.",
+            duration="6s",
+            resolution="720p",
+            aspect_ratio="9:16",
+            task="extend",
+            model=OMNI_12.id,
+            video={"mime_type": "video/mp4", "uri": "gs://bucket/clip.mp4"},
+            previous_interaction_id="interaction-1",
+        )
+        self.assertNotIn("previous_interaction_id", payload)
+        self.assertEqual(payload["generation_config"]["video_config"]["task"], "extend")
+        self.assertEqual(payload["input"][0]["type"], "video")
+
+    def test_extend_without_a_clip_cannot_pretend_to_chain(self):
+        with self.assertRaises(OmniAPIError):
+            build_payload(
+                prompt="Continue as she smiles.",
+                duration="6s",
+                resolution="720p",
+                aspect_ratio="9:16",
+                task="extend",
+                previous_interaction_id="interaction-1",
+            )
+
+    def test_upscale_keeps_task_and_drops_a_chained_id(self):
+        payload = build_payload(
+            prompt="",
+            duration="8s",
+            resolution="1080p",
+            aspect_ratio="16:9",
+            task="upscale",
+            model=OMNI_12.id,
+            video={"mime_type": "video/mp4", "uri": "gs://bucket/clip.mp4"},
+            previous_interaction_id="interaction-1",
+        )
+        self.assertNotIn("previous_interaction_id", payload)
+        self.assertEqual(payload["generation_config"]["video_config"]["task"], "upscale")
+        self.assertEqual([item["type"] for item in payload["input"]], ["video"])
 
     def test_upscale_sends_resolution_and_source_video(self):
         payload = build_payload(
@@ -159,11 +201,52 @@ class PayloadTests(unittest.TestCase):
             ReferenceImage()
 
     def test_upscale_result_is_not_chained(self):
-        from app.jobs import interaction_can_chain
+        from app.jobs import followup_chain_id, interaction_can_chain
 
         self.assertFalse(interaction_can_chain({"mode": "upscale", "api_task": "upscale"}))
         self.assertTrue(interaction_can_chain({"mode": "edit", "api_task": "edit"}))
         self.assertTrue(interaction_can_chain({"mode": "generate", "api_task": "text_to_video"}))
+        common = dict(
+            stateful=True,
+            supports_multiturn=True,
+            source_interaction_id="interaction-1",
+            source_meta={"mode": "generate", "api_task": "text_to_video"},
+            source_model=OMNI_12.id,
+            requested_model=OMNI_12.id,
+            requested_video_uri=None,
+            source_video_uri="gs://bucket/clip.mp4",
+        )
+        self.assertEqual(followup_chain_id(mode="edit", **common), "interaction-1")
+        self.assertIsNone(followup_chain_id(mode="extend", **common))
+        self.assertIsNone(followup_chain_id(mode="upscale", **common))
+        self.assertIsNone(
+            followup_chain_id(
+                mode="edit",
+                **{**common, "requested_video_uri": "gs://bucket/other.mp4"},
+            )
+        )
+        self.assertIsNone(
+            followup_chain_id(
+                mode="edit",
+                **{**common, "source_meta": {"mode": "upscale", "api_task": "upscale"}},
+            )
+        )
+
+    def test_upscale_ladder_and_track_dimensions(self):
+        from app.gcs_util import mp4_track_dimensions
+        from app.model_catalog import resolution_label, upscale_targets
+
+        self.assertEqual(upscale_targets("360p"), ("720p", "1080p"))
+        self.assertEqual(upscale_targets("720p"), ("1080p", "4k"))
+        self.assertEqual(upscale_targets("1080p"), ())
+        self.assertIsNone(upscale_targets(None))
+        self.assertEqual(resolution_label(720, 1280), "720p")
+        self.assertEqual(resolution_label(1080, 1920), "1080p")
+
+        width = (1280 * 65536).to_bytes(4, "big")
+        height = (720 * 65536).to_bytes(4, "big")
+        header = b"\x00\x00\x00\x5c" + b"tkhd" + b"\x00\x00\x00\x00" + (b"\x00" * 72) + width + height
+        self.assertEqual(mp4_track_dimensions(header), (1280, 720))
 
     def test_extend_input_differs_between_models(self):
         self.assertIsNone(OMNI_12.extend_input_max)
@@ -320,6 +403,40 @@ class ApiTests(unittest.TestCase):
         self.assertIn("gemini-omni-1.2-flash", text)
         self.assertIn("https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/omni-1-2-flash", text)
         self.assertIn("previous_interaction_id", text)
+
+    def test_upscale_rejects_an_illegal_target_before_submit(self):
+        from app.jobs import Job, JobStatus, job_store
+
+        job = Job(
+            id="src360",
+            status=JobStatus.completed,
+            video_uri="gs://bucket/clip.mp4",
+            interaction_id="interaction-1",
+            duration_sec=4,
+        )
+        job.meta = {
+            "output_resolution": "360p",
+            "model": OMNI_12.id,
+            "mode": "generate",
+            "api_task": "text_to_video",
+        }
+        job_store._jobs[job.id] = job
+        try:
+            response = self.client.post(
+                "/api/generate",
+                json={
+                    "mode": "upscale",
+                    "prompt": "",
+                    "source_job_id": job.id,
+                    "resolution": "4k",
+                    "model": OMNI_12.id,
+                    "stateful": True,
+                },
+            )
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("360p", response.json()["detail"])
+        finally:
+            job_store._jobs.pop(job.id, None)
 
     def test_health_lists_both_models(self):
         body = self.client.get("/api/health").json()

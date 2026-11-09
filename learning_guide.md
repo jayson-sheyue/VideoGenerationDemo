@@ -170,13 +170,13 @@ Veo 的 reference 还有 `asset` / `style` 类型且张数更少；Omni 走 Inte
 
 硬限制（线上实测）：
 
-- 源片 **≤ 10 秒**。16s 会报 `Editing duration 16 exceeds maximum duration 10.`
+- 源片 **1.2 ≤ 15 秒，1.1 ≤ 10 秒**。超限会报 `Editing duration N exceeds maximum duration …`。
 - `response_format` **只接受 `resolution`**（外加可选的 `delivery` / `gcs_uri`）。传 `aspect_ratio` 或 `duration` 会被拒。
 - 当前 **不能改声音 / 台词**。
 
 文档：[Edit videos](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/video/edit-videos)。
 
-多轮编辑：1.2 把上一次 `interaction.id` 放进 `previous_interaction_id`（需要 `store: true`），**并且不能再带** `generation_config.video_config.task`。线上会直接 400：`previous_interaction_id is not allowed when video task is set`。这一轮只发新指令，不重传成片。**1.1 在 Agent Platform 上会拒这个字段**，所以 1.1 的 Continue 仍是新请求，把最新成片的 `gs://` 再当 `input.video`，并带 `task=edit`。1.2 取消「多轮编辑」时走同一条重传路径。1.2 的编辑还可以再带最多两张参考图。
+多轮只用于 **Continue / Edit**。1.2 把上一次 `interaction.id` 放进 `previous_interaction_id`（需要 `store: true`），**并且不能再带** `generation_config.video_config.task`。线上会直接 400：`previous_interaction_id is not allowed when video task is set`。这一轮只发新指令，不重传成片。**续写和放大不能走这条链**：它们必须带 `task=extend` / `task=upscale`，所以始终重传 `gs://` 成片，不带 `previous_interaction_id`。放大文档里的「上一轮 id + task=upscale」和这条线上错误冲突，本 Demo 用已经跑通的重传路径。**1.1 在 Agent Platform 上会拒这个字段**，所以 1.1 的 Continue 仍是新请求，把最新成片的 `gs://` 再当 `input.video`，并带 `task=edit`。1.2 取消「多轮编辑」，或源片地址和任务成片不一致时，走同一条重传路径。1.2 的编辑还可以再带最多两张参考图。
 
 ### 3.5 `extend` — 续写（往后接，返回整段）
 
@@ -230,7 +230,7 @@ API 对「这个 task 不该出现的字段」是直接 4xx，而不是忽略。
 
 `upscale` 只提高分辨率。[VideoGenerationModelParams](https://docs.cloud.google.com/gemini-enterprise-agent-platform/reference/rest/Shared.Types/VideoGenerationModelParams) 的原文是 “Upscale a video to a higher resolution”。[1.2 模型卡片](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/omni-1-2-flash) 把它列为 standalone video upscaling，输入最长 15 秒。[GA 公告](https://cloud.google.com/blog/products/ai-machine-learning/gemini-omni-1-2-flash-generally-available) 建议先用 360p / 720p 出草稿，再放大到 1080p 或 4K。
 
-线上实测：input 里只要有 `type: text`，就返回 `Text input is not supported for upscale task`。本 Demo 因此不传提示词、参考图或 `previous_interaction_id`，只传源视频和 `response_format.resolution`。不能用它改内容。
+线上实测：input 里只要有 `type: text`，就返回 `Text input is not supported for upscale task`。本 Demo 因此不传提示词、参考图或 `previous_interaction_id`，只传源视频和 `response_format.resolution`。不能用它改内容。目标分辨率必须高于源片，且遵守阶梯：360p → 720p 或 1080p；720p → 1080p 或 4k；**1080p → 4k 不支持**。知道源分辨率时，Demo 会在提交前拦住非法组合。
 
 [Cloud Transcoder API](https://docs.cloud.google.com/transcoder/docs/concepts/overview) 是转码服务：容器（MP4 / DASH / HLS）、码率、裁剪、贴片、编码参数、HDR、加密、缩略图。它的分辨率变化是重采样后再编码，不是 Omni 的生成式放大，也不受 15 秒上限约束。本 Demo 不调用它。
 

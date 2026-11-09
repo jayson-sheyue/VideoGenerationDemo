@@ -199,7 +199,8 @@ function applyCapabilityChrome() {
   }
   seedField.hidden = !profile.supports_seed;
   labelsField.hidden = !profile.supports_labels;
-  const chainable = profile.supports_multiturn && currentMode !== "generate" && currentMode !== "upscale";
+  const chainable =
+    profile.supports_multiturn && (currentMode === "continue" || currentMode === "edit");
   statefulField.hidden = !chainable;
   modelNote.textContent = modelNoteText(profile);
   if (brandSubEl) brandSubEl.textContent = profileHeadline(profile);
@@ -258,8 +259,55 @@ function requestExtras() {
   const body = { model: selectedModelId(), stateful: false };
   if (profile.supports_seed && seedEl.value !== "") body.seed = Number(seedEl.value);
   if (profile.supports_labels && labelsEl.value.trim()) body.labels = parseLabels(labelsEl.value);
-  if (profile.supports_multiturn) body.stateful = statefulEl.checked;
+  if (
+    profile.supports_multiturn &&
+    (currentMode === "continue" || currentMode === "edit")
+  ) {
+    body.stateful = statefulEl.checked;
+  }
   return body;
+}
+
+const ALL_RESOLUTIONS = ["360p", "720p", "1080p", "4k"];
+const UPSCALE_FROM = {
+  "360p": ["720p", "1080p"],
+  "720p": ["1080p", "4k"],
+  "1080p": [],
+  "4k": [],
+};
+
+function setResolutionOptions(values, preferred) {
+  const select = document.getElementById("resolution");
+  const current = preferred || select.value;
+  select.innerHTML = "";
+  for (const value of values) {
+    const opt = document.createElement("option");
+    opt.value = value;
+    opt.textContent = value;
+    select.appendChild(opt);
+  }
+  if (!values.length) {
+    select.disabled = true;
+    return;
+  }
+  select.disabled = false;
+  select.value = values.includes(current) ? current : values[0];
+}
+
+function sourceOutputResolution(job) {
+  if (!job) return "";
+  return job.output_resolution || (job.meta && job.meta.output_resolution) || "";
+}
+
+function applyUpscaleResolutionChoices() {
+  const source = sourceOutputResolution(selectedJob);
+  const allowed = Object.prototype.hasOwnProperty.call(UPSCALE_FROM, source)
+    ? UPSCALE_FROM[source]
+    : ["720p", "1080p", "4k"];
+  setResolutionOptions(allowed);
+  if (!allowed.length && source) {
+    setStatus(`${source} 没有可放大的目标。官方不支持 1080p → 4k。`);
+  }
 }
 
 let pollTimer = null;
@@ -397,6 +445,7 @@ const MODE_GUIDE = {
       "Duration 是本次新增长度（3–10s，不是 15s）。返回拼接后的完整成片。",
       "例如 8s 源片再续 8s → 约 16s。不要按 15+15+15 规划到 45s。",
       "「看约 10 秒」是上下文；「留约 30 秒」是成片里保留的源片末尾。两件事不一样。",
+      "续写始终重传 gs:// 并带 task=extend。多轮 id 只用于编辑，和 task 不能同时出现。",
     ],
     note: "",
     placeholder: "例：Continue as they watch the interface light up and smile.",
@@ -588,10 +637,7 @@ function restorePrompt(mode) {
 }
 
 function raiseLowUpscaleResolution() {
-  const resolution = document.getElementById("resolution");
-  if (resolution.value === "360p" || resolution.value === "720p") {
-    resolution.value = "1080p";
-  }
+  applyUpscaleResolutionChoices();
 }
 
 function setMode(mode) {
@@ -647,10 +693,12 @@ function setMode(mode) {
     applyCapabilityChrome();
   }
   if (switching) {
+    if (mode !== "upscale") setResolutionOptions(ALL_RESOLUTIONS);
     restorePrompt(mode);
     if (!isGenerate && selectedJob && selectedJob.video_uri) applySourceJob(selectedJob);
-    if (mode === "upscale") raiseLowUpscaleResolution();
   }
+  if (mode === "upscale") applyUpscaleResolutionChoices();
+  else if (!switching) setResolutionOptions(ALL_RESOLUTIONS, document.getElementById("resolution").value);
 }
 
 function applySourceJob(job) {
@@ -661,6 +709,7 @@ function applySourceJob(job) {
   if (job.status === "completed" && job.video_uri) {
     resultActions.hidden = false;
   }
+  if (currentMode === "upscale") applyUpscaleResolutionChoices();
 }
 
 function extractUrlsLocally(text) {
@@ -985,7 +1034,7 @@ async function pickSourceJob({ maxSeconds }) {
     (j) =>
       j.status === "completed" &&
       j.video_uri &&
-      (maxSeconds == null || (j.duration_sec != null && j.duration_sec <= maxSeconds))
+      (maxSeconds == null || (j.duration_sec != null && j.duration_sec <= maxSeconds + 0.05))
   );
 }
 
@@ -1037,7 +1086,7 @@ async function applyModeExample(mode, index) {
     maxSeconds != null &&
     selectedJob &&
     selectedJob.duration_sec != null &&
-    selectedJob.duration_sec > maxSeconds + 0.5 &&
+    selectedJob.duration_sec > maxSeconds + 0.05 &&
     (selectedJob.id === currentId || selectedJob.video_uri === currentUri);
   if (currentTooLong) {
     setStatus(`示例已填入。当前源片 ${selectedJob.duration_sec}s 超过 ${maxSeconds}s，请换一条更短的成片。`);
@@ -1149,7 +1198,7 @@ async function renderSuggestions(job) {
 
   const editMax = job.edit_max_sec || activeProfile().edit_max;
   suggestionsTitle.textContent =
-    job.duration_sec > editMax
+    job.duration_sec > editMax + 0.05
       ? `下一步试试（当前 ${job.duration_sec}s，超过 ${editMax}s 只能续写）`
       : "下一步试试（点击即可填入指令与源视频）";
   suggestions.hidden = false;
@@ -1313,15 +1362,23 @@ function renderJob(job) {
       : "";
   }
   const upscaleBtn = document.getElementById("useForUpscale");
-  const canUpscale =
-    activeProfile().supports_upscale &&
-    (job.duration_sec == null || job.duration_sec <= 15.5);
+  const upscaleMax = job.upscale_max_sec || activeProfile().upscale_max;
+  const sourceRes = sourceOutputResolution(job);
+  const upscaleTargets = Object.prototype.hasOwnProperty.call(UPSCALE_FROM, sourceRes)
+    ? UPSCALE_FROM[sourceRes]
+    : null;
+  const tooLongToUpscale =
+    upscaleMax != null && job.duration_sec != null && job.duration_sec > upscaleMax + 0.05;
+  const noUpscaleTarget = upscaleTargets != null && upscaleTargets.length === 0;
+  const canUpscale = activeProfile().supports_upscale && !tooLongToUpscale && !noUpscaleTarget;
   upscaleBtn.disabled = !canUpscale;
   upscaleBtn.title = !activeProfile().supports_upscale
     ? "当前模型没有单独放大"
-    : canUpscale
-      ? "用 task=upscale 提高到更高分辨率。不能写提示词，也不能改内容"
-      : "放大要求源片不超过 15 秒";
+    : tooLongToUpscale
+      ? `放大要求源片不超过 ${upscaleMax} 秒`
+      : noUpscaleTarget
+        ? `${sourceRes} 不能再放大。官方不支持 1080p → 4k`
+        : "用 task=upscale 提高到更高分辨率。不能写提示词，也不能改内容";
 
   if (job.status === "completed" && job.video_url) {
     showVideo(job.video_url);
@@ -1618,6 +1675,9 @@ async function submitJob() {
       generate_task: currentMode === "generate" ? currentGenTask : undefined,
       ...requestExtras(),
     };
+    if (currentMode === "upscale" && !base.resolution) {
+      throw new Error("这条片子没有可放大的目标。官方不支持 1080p → 4k。");
+    }
 
     if (currentMode === "generate") {
       const prepared = await prepareGenerateInput();

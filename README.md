@@ -46,7 +46,7 @@ Omni Interactions accepts only GCS `uri` or inline base64—not arbitrary HTTPS 
 
 Without GCS the service falls back to base64 / local disk (fragile for large files). On Cloud Run the browser posts media to the service, which writes GCS—no separate “upload first” step for the presenter.
 
-**1.2 Continue can be multi-turn** with `store: true` and `previous_interaction_id` (~7 days). Uncheck “stateful”, or use 1.1, and the demo re-attaches the latest `gs://` clip. **Upscale is terminal**: later Edit / Extend must re-send the mp4, not the upscale interaction id.
+**1.2 Continue / Edit can be multi-turn** with `store: true` and `previous_interaction_id` (~7 days), and that follow-up omits `video_config.task`. Uncheck “stateful”, or use 1.1, and the demo re-attaches the latest `gs://` clip. **Extend and Upscale always re-send the mp4** with `task=extend` or `task=upscale` — the live API rejects that task together with `previous_interaction_id`. Upscale targets follow the official ladder (360p → 720p/1080p, 720p → 1080p/4k; 1080p → 4k is not supported). **Upscale is terminal**: later Edit / Extend must re-send the mp4, not the upscale interaction id.
 
 ## Local run
 

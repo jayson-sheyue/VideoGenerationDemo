@@ -165,6 +165,17 @@ def build_payload(
         else:
             task = "text_to_video"
 
+    # Live API rejects previous_interaction_id together with video_config.task.
+    # Extend and upscale are defined by that task, so they keep the clip and the
+    # task and drop the chained id. A follow-up edit keeps the id and drops the task.
+    if previous_interaction_id and task in {"extend", "upscale"}:
+        if not video:
+            raise OmniAPIError(
+                f"{task} needs the source video. previous_interaction_id cannot "
+                "be combined with video_config.task, so this request cannot drop the clip."
+            )
+        previous_interaction_id = None
+
     if video and not previous_interaction_id:
         input_items.append(_media_item("video", video))
     for clip in videos:
@@ -193,7 +204,6 @@ def build_payload(
 
     generation_config: dict[str, Any] = {}
     # Live API: "previous_interaction_id is not allowed when video task is set."
-    # A follow-up turn continues the stored interaction and must not set task.
     if task and not previous_interaction_id:
         generation_config["video_config"] = {"task": task}
     if seed is not None:

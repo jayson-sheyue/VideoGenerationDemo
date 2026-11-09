@@ -304,6 +304,40 @@ def probe_video_duration(gcs_uri: str, *, head_bytes: int = 65536) -> float | No
     return mvhd_duration_sec(head)
 
 
+def mp4_track_dimensions(data: bytes) -> tuple[int, int] | None:
+    """Width and height from the first tkhd in a header, if the moov is present."""
+    start = 0
+    while True:
+        pos = data.find(b"tkhd", start)
+        if pos < 0 or pos + 84 > len(data):
+            return None
+        version = data[pos + 4]
+        off = pos + 8
+        off += 32 if version == 1 else 20
+        off += 8 + 2 + 2 + 2 + 2 + 36
+        if off + 8 > len(data):
+            start = pos + 4
+            continue
+        width = int.from_bytes(data[off : off + 4], "big") / 65536
+        height = int.from_bytes(data[off + 4 : off + 8], "big") / 65536
+        if width >= 16 and height >= 16:
+            return int(round(width)), int(round(height))
+        start = pos + 4
+
+
+def probe_video_resolution(gcs_uri: str, *, head_bytes: int = 524288) -> str | None:
+    """720p / 1080p / … when tkhd is in the file head. None if moov is at the end."""
+    from app.model_catalog import resolution_label
+
+    head = _download_gcs_head(gcs_uri, head_bytes=head_bytes)
+    if not head:
+        return None
+    dims = mp4_track_dimensions(head)
+    if not dims:
+        return None
+    return resolution_label(*dims)
+
+
 def download_gcs_bytes(
     gcs_uri: str,
     *,

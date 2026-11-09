@@ -23,7 +23,7 @@ from app.jobs import (
     job_store,
     reuse_images_from_job,
     reuse_videos_from_job,
-    interaction_can_chain,
+    followup_chain_id,
     run_generation_job,
 )
 from app.model_catalog import (
@@ -33,6 +33,7 @@ from app.model_catalog import (
     normalize_labels,
     profile_for,
     resolve_model,
+    upscale_targets,
 )
 from app.omni_client import OmniAPIError
 from app import omni_client
@@ -312,11 +313,14 @@ async def generate(body: GenerateRequest) -> dict:
         src = await job_store.get(reuse_id)
         if not src:
             raise HTTPException(404, f"reuse_job_id not found: {reuse_id}")
-        generate_task = (
-            generate_task
-            or src.meta.get("generate_task")
-            or src.meta.get("task")
-        )
+        inherited_kind = src.meta.get("generate_task") or src.meta.get("task")
+        if inherited_kind in {
+            "text_to_video",
+            "image_to_video",
+            "frames_to_video",
+            "reference_to_video",
+        }:
+            generate_task = generate_task or inherited_kind
         if generate_task == "text_to_video":
             reuse_images = []
             reuse_videos = []
@@ -368,7 +372,8 @@ async def generate(body: GenerateRequest) -> dict:
             f"{generate_task} needs {need} (upload, paste a URL, or Load example)",
         )
 
-    source_video = (body.source_video_uri or "").strip() or None
+    requested_source = (body.source_video_uri or "").strip() or None
+    source_video = requested_source
     previous_interaction_id = None
     source_modes = {"continue", "edit", "extend", "upscale"}
 
@@ -378,16 +383,27 @@ async def generate(body: GenerateRequest) -> dict:
             raise HTTPException(404, f"source_job_id not found: {body.source_job_id}")
         if not source_video:
             source_video = src.video_uri
-        same_model = not src.meta.get("model") or src.meta.get("model") == model_id
-        if (
-            body.stateful
-            and profile.supports_multiturn
-            and mode != "upscale"
-            and interaction_can_chain(src.meta)
-            and src.interaction_id
-            and same_model
-        ):
-            previous_interaction_id = src.interaction_id
+        previous_interaction_id = followup_chain_id(
+            mode=mode,
+            stateful=body.stateful,
+            supports_multiturn=profile.supports_multiturn,
+            source_interaction_id=src.interaction_id,
+            source_meta=src.meta,
+            source_model=src.meta.get("model"),
+            requested_model=model_id,
+            requested_video_uri=requested_source,
+            source_video_uri=src.video_uri,
+        )
+        if mode == "upscale":
+            source_res = src.meta.get("output_resolution")
+            allowed = upscale_targets(source_res)
+            if allowed is not None and body.resolution not in allowed:
+                legal = ", ".join(allowed) if allowed else "none"
+                raise HTTPException(
+                    400,
+                    f"Cannot upscale a {source_res} clip to {body.resolution}. "
+                    f"Official targets from {source_res}: {legal}.",
+                )
 
     if mode in source_modes and not previous_interaction_id and not (
         source_video and source_video.startswith("gs://")

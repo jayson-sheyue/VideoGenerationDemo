@@ -11,13 +11,14 @@ from typing import Any
 
 from app import omni_client, prompt_enhancer
 from app.config import OUTPUT_DIR, gcs_prefix_for_inputs, settings
-from app.model_catalog import ModelProfile, profile_for
+from app.model_catalog import ModelProfile, profile_for, upscale_targets
 from app.gcs_util import (
     mvhd_duration_sec,
     build_input_object_uri,
     ensure_omni_source_mp4,
     guess_ext,
     probe_video_duration,
+    probe_video_resolution,
     save_bytes_locally,
     stage_images_to_gcs,
     upload_local_file_to_gcs,
@@ -117,17 +118,13 @@ class Job:
             "model": self.meta.get("model"),
             "edit_max_sec": _edit_limit(self),
             "upscale_max_sec": _upscale_limit(self),
+            "output_resolution": self.meta.get("output_resolution"),
             "editable": bool(
                 self.video_uri
                 and self.duration_sec is not None
-                and self.duration_sec <= _edit_limit(self)
+                and self.duration_sec <= _edit_limit(self) + 0.05
             ),
-            "upscalable": bool(
-                self.video_uri
-                and _upscale_limit(self) is not None
-                and self.duration_sec is not None
-                and self.duration_sec <= _upscale_limit(self)
-            ),
+            "upscalable": _job_upscalable(self),
             "generate_task": self.meta.get("generate_task") or self.meta.get("task"),
             "reuse_ready": _reuse_ready(self),
             "shot_list": self.meta.get("shot_list"),
@@ -170,6 +167,18 @@ def _upscale_limit(job: Job) -> float | None:
     return profile_for(job.meta.get("model")).upscale_max
 
 
+def _job_upscalable(job: Job) -> bool:
+    limit = _upscale_limit(job)
+    if not job.video_uri or limit is None:
+        return False
+    if job.duration_sec is not None and job.duration_sec > limit + 0.05:
+        return False
+    targets = upscale_targets(job.meta.get("output_resolution"))
+    if targets is not None and not targets:
+        return False
+    return True
+
+
 def reuse_videos_from_job(job: Job) -> list[dict[str, str]]:
     return [
         {
@@ -189,7 +198,43 @@ def interaction_can_chain(meta: dict | None) -> bool:
     return mode != "upscale" and task != "upscale"
 
 
+def followup_chain_id(
+    *,
+    mode: str,
+    stateful: bool,
+    supports_multiturn: bool,
+    source_interaction_id: str | None,
+    source_meta: dict | None,
+    source_model: str | None,
+    requested_model: str,
+    requested_video_uri: str | None,
+    source_video_uri: str | None,
+) -> str | None:
+    """Only Continue / Edit may continue a stored interaction.
+
+    Extend must send task=extend plus the clip. Upscale must send task=upscale
+    plus the clip. The live API rejects previous_interaction_id together with
+    either task. A pasted gs:// that is not this job's clip is a new edit.
+    """
+    if mode not in {"continue", "edit"}:
+        return None
+    if not stateful or not supports_multiturn or not source_interaction_id:
+        return None
+    if not interaction_can_chain(source_meta):
+        return None
+    if source_model and source_model != requested_model:
+        return None
+    requested = (requested_video_uri or "").strip()
+    stored = (source_video_uri or "").strip()
+    if requested and stored and requested != stored:
+        return None
+    return source_interaction_id
+
+
 def _reuse_ready(job: Job) -> bool:
+    """Regenerate only replays a generate job. Edit refs are not a new generation."""
+    if job.mode != "generate":
+        return False
     if (
         job.meta.get("gcs_ref_items")
         or job.meta.get("gcs_refs")
@@ -197,9 +242,7 @@ def _reuse_ready(job: Job) -> bool:
     ):
         return True
     kind = job.meta.get("generate_task") or job.meta.get("task")
-    return job.mode == "generate" and kind == "text_to_video" and bool(
-        job.meta.get("shot_list")
-    )
+    return kind == "text_to_video" and bool(job.meta.get("shot_list"))
 
 
 def resolve_generate_kind(generate_task: str | None, image_count: int) -> tuple[str, str]:
@@ -222,9 +265,18 @@ async def _submit_and_finalize(job: Job, *, payload: dict[str, Any]) -> None:
             body=created,
         )
     job.interaction_id = interaction_id
-    job.meta["task"] = (
-        (payload.get("generation_config") or {}).get("video_config", {}).get("task")
-    )
+    sent_task = (
+        (payload.get("generation_config") or {}).get("video_config") or {}
+    ).get("task")
+    job.meta["task_sent"] = sent_task
+    # Keep the operation name when a follow-up edit omits video_config.task.
+    # Clearing it made the next regenerate inherit task=null / "edit".
+    if sent_task:
+        job.meta["task"] = sent_task
+        job.meta.pop("task_omitted", None)
+    else:
+        job.meta["task"] = job.meta.get("api_task")
+        job.meta["task_omitted"] = bool(payload.get("previous_interaction_id"))
 
     status = (created.get("status") or "").lower()
     if status == "completed":
@@ -503,11 +555,24 @@ async def run_generation_job(
             "seed": seed,
             "labels": labels or None,
             "generate_task": (generate_task or "").strip().lower() or None,
+            # Extend keeps the source resolution; the form value is not sent.
+            "output_resolution": None if mode == "extend" else resolution,
         }
 
         if mode in {"continue", "edit", "extend", "upscale"}:
             api_task = {"extend": "extend", "upscale": "upscale"}.get(mode, "edit")
-            chain_id = previous_interaction_id if stateful and profile.supports_multiturn else None
+            # Extend/upscale require their own task, which cannot share
+            # previous_interaction_id. Only an edit follow-up chains.
+            chain_id = (
+                previous_interaction_id
+                if api_task == "edit" and stateful and profile.supports_multiturn
+                else None
+            )
+            source_job = await job_store.get(source_job_id) if source_job_id else None
+            if api_task == "extend" and source_job:
+                inherited = source_job.meta.get("output_resolution")
+                if inherited:
+                    job.meta["output_resolution"] = inherited
             if api_task == "upscale":
                 chain_id = None
                 if profile.upscale_max is None:
@@ -515,6 +580,24 @@ async def run_generation_job(
                         f"{model_id} has no standalone upscale in this demo. "
                         "Switch to gemini-omni-1.2-flash."
                     )
+                source_res = (
+                    source_job.meta.get("output_resolution") if source_job else None
+                )
+                if not source_res and source_video_uri and source_video_uri.startswith("gs://"):
+                    source_res = await asyncio.to_thread(
+                        probe_video_resolution, source_video_uri
+                    )
+                if source_res:
+                    job.meta["source_resolution"] = source_res
+                    allowed = upscale_targets(source_res)
+                    if allowed is not None and resolution not in allowed:
+                        legal = ", ".join(allowed) if allowed else "none"
+                        raise omni_client.OmniAPIError(
+                            f"Cannot upscale a {source_res} clip to {resolution}. "
+                            f"Official targets from {source_res}: {legal}. "
+                            "360p → 720p or 1080p; 720p → 1080p or 4k; "
+                            "1080p → 4k is not supported."
+                        )
             if not chain_id and (
                 not source_video_uri or not source_video_uri.startswith("gs://")
             ):

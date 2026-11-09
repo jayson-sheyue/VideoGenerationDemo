@@ -57,7 +57,8 @@ PROJECT_ID=your-gcp-project BUCKET=your-gcs-bucket ./deploy/cloud-run.sh
 - 非同期ジョブとして扱うこと。
 - 音声ファイル入力なし。台詞編集不可。
 - Extend は公式どおり：**入力は任意長**。`response_format.duration` が今回の追加秒数（3–10）。`aspect_ratio` はライブで拒否されるため送らない。長いソースを Demo 側で切り詰めない。
-- Upscale はテキスト不可。Upscale 後の Edit/Extend は `gs://` を再送。
+- 多輪 `previous_interaction_id` は Continue / Edit のみ。そのターンは `video_config.task` を送らない。Extend と Upscale は常に `gs://` と `task` を再送する。
+- Upscale はテキスト不可。解像度は 360p→720p/1080p、720p→1080p/4k。1080p→4k は不可。Upscale 後の Edit/Extend は `gs://` を再送。
 - 失敗時は Omni の `errors` 原文を `message` に出す。
 - 素材の **fragmented / CMAF MP4** は progressive に remux（長さは変えない）。meta に `source_remuxed: true` が出ることがある。
 

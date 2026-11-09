@@ -37,7 +37,7 @@ Omni 的 Interactions API **不接受任意 HTTPS 图片链接**，只接受：
 
 没有配置 GCS 时会退回 base64 直传 / 本机落盘，大文件不稳定，生产环境请务必配 bucket。Cloud Run 上同样是浏览器把图发给服务，再写入 GCS，**不需要**把图先放到自己的电脑之外的网盘。
 
-**1.2 的 Continue 可以是多轮。** 请求带 `store: true`，下一步把上一条的 interaction id 放进 `previous_interaction_id`，不必重传成片。存储大约保留 7 天。取消勾选「多轮编辑」，或使用 1.1 时，仍是一次新的 Interaction，把最新成片的 `gs://` 再挂进去。1.1 在 Agent Platform 上会拒绝 `previous_interaction_id`。**Upscale 之后不能接着链式编辑**：放大是终点 interaction，后续 Edit / Extend 必须重传 `gs://` 成片。
+**1.2 的 Continue / Edit 可以是多轮。** 请求带 `store: true`，下一步把上一条的 interaction id 放进 `previous_interaction_id`，并且不再带 `video_config.task`，不必重传成片。存储大约保留 7 天。取消勾选「多轮编辑」，或使用 1.1 时，仍是一次新的 Interaction，把最新成片的 `gs://` 再挂进去。1.1 在 Agent Platform 上会拒绝 `previous_interaction_id`。**续写和放大始终重传成片**并带各自的 `task`，因为这个 task 和 `previous_interaction_id` 不能同时出现。放大目标按官方阶梯：360p → 720p/1080p，720p → 1080p/4k，1080p 不能到 4k。**Upscale 之后不能接着链式编辑**：放大是终点 interaction，后续 Edit / Extend 必须重传 `gs://` 成片。
 
 ## 本地运行
 

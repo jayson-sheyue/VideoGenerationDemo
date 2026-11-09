@@ -223,10 +223,10 @@
       <h2>本 Demo 怎么对应</h2>
       <ul>
         <li>实验台右上角可换模型。自定义 ID 会原样发给接口，控件按 ID 里是否包含 1.2 来套用上限。</li>
-        <li>Generate 的四种任务、Continue / Edit、Extend 都还在。1.2 的 Continue 默认走多轮 interaction；取消勾选就改回重传 <code>gs://</code>。</li>
+        <li>Generate 的四种任务、Continue / Edit、Extend 都还在。1.2 的 Continue / Edit 默认走多轮 interaction，且这一轮不带 <code>video_config.task</code>；取消勾选就改回重传 <code>gs://</code>。Extend 始终重传成片并带 <code>task=extend</code>。</li>
         <li>切到 Extend 时，实验台会按当前模型显示源片上限：1.2 为任意长度（成片约 ≤ 40 秒）；1.1 仍拦 30 秒。单次新增永远是 3–10 秒。</li>
         <li>References 可以再挂最多 3 段参考视频。编辑和续写在 1.2 上可以再挂最多 2 张参考图。</li>
-        <li>Upscale 只发给 1.2。源片超过 15 秒会在提交前拦住。提示词框会藏起来，请求不带 <code>type: text</code>。</li>
+        <li>Upscale 只发给 1.2，并且重传成片、带 <code>task=upscale</code>。源片超过 15 秒会在提交前拦住。目标分辨率按官方阶梯：360p → 720p/1080p，720p → 1080p/4k，1080p → 4k 不支持。提示词框会藏起来，请求不带 <code>type: text</code>。</li>
         <li>Seed 和 labels 只在 1.2 上出现。labels 要用小写的 <code>key=value</code>。</li>
         <li>1.2 请求带 <code>store: true</code> 和 <code>background: true</code>，页面仍轮询任务。取消页面等待不会取消已经提交、仍可能计费的生成。</li>
       </ul>
