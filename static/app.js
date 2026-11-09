@@ -64,6 +64,11 @@ const videoRefs = document.getElementById("videoRefs");
 const videoListEl = document.getElementById("videoList");
 const videoPicker = document.getElementById("videoPicker");
 const durationEl = document.getElementById("duration");
+const durationNameEl = document.getElementById("durationName");
+const resolutionNameEl = document.getElementById("resolutionName");
+const mediaControls = document.getElementById("mediaControls");
+const advancedEl = document.getElementById("advanced");
+const advancedSummaryEl = document.getElementById("advancedSummary");
 const audioInputNote = document.getElementById("audioInputNote");
 
 let catalog = [];
@@ -197,25 +202,95 @@ function applyCapabilityChrome() {
     upscaleBtn.disabled = !profile.supports_upscale;
     upscaleBtn.title = profile.supports_upscale ? "" : "当前模型没有单独放大";
   }
-  seedField.hidden = !profile.supports_seed;
-  labelsField.hidden = !profile.supports_labels;
-  const chainable =
-    profile.supports_multiturn && (currentMode === "continue" || currentMode === "edit");
-  statefulField.hidden = !chainable;
   modelNote.textContent = modelNoteText(profile);
   if (brandSubEl) brandSubEl.textContent = profileHeadline(profile);
-  if (advancedHintEl) {
-    advancedHintEl.textContent = profile.supports_seed
-      ? "Seed 与 labels 会随本次请求发送。多轮编辑需要上一条任务的 interaction id，服务端大约保留 7 天。"
-      : "当前模型不发送 seed、labels，也不支持多轮 interaction。编辑和续写都会重传 gs:// 源片。";
-  }
   if (stageEmptyCopyEl) {
     stageEmptyCopyEl.textContent = profile.supports_upscale
       ? "先选模型，再选文生 / 首帧 / 首尾帧 / 参考。成片之后可以继续编辑、续写，或把 360p / 720p 草稿放大。"
       : "先选模型，再选文生 / 首帧 / 首尾帧 / 参考。成片之后可以继续编辑或续写。当前模型没有单独放大。";
   }
   paintHealth();
-  if (audioInputNote) audioInputNote.hidden = currentMode !== "generate";
+  syncVisibleFields();
+}
+
+function syncVisibleFields() {
+  const profile = activeProfile();
+  const mode = currentMode;
+  const isGenerate = mode === "generate";
+  const guide = isGenerate ? GEN_GUIDE[currentGenTask] : null;
+  const showDuration = isGenerate || mode === "extend";
+  const showResolution = mode !== "extend";
+  const showAspect = isGenerate;
+  const showPrompt = mode !== "upscale";
+  const showSource = !isGenerate;
+  const showEnhance = isGenerate || mode === "extend";
+  const showAudio = isGenerate && enhancePromptEl.checked;
+  const showImages = isGenerate
+    ? guide.slots !== 0
+    : mode !== "upscale" && profile.edit_reference_images_max > 0;
+  const showVideos =
+    isGenerate &&
+    currentGenTask === "reference_to_video" &&
+    profile.reference_videos_max > 0;
+  const showSeed = !!profile.supports_seed;
+  const showLabels = !!profile.supports_labels;
+  const showStateful =
+    !!profile.supports_multiturn && (mode === "continue" || mode === "edit");
+
+  durationField.hidden = !showDuration;
+  resolutionField.hidden = !showResolution;
+  aspectField.hidden = !showAspect;
+  if (mediaControls) mediaControls.hidden = !(showDuration || showResolution || showAspect);
+  if (promptField) promptField.hidden = !showPrompt;
+  sourceBox.hidden = !showSource;
+  sourceVideoField.hidden = !showSource;
+  enhanceToggle.hidden = !showEnhance;
+  audioToggles.hidden = !showAudio;
+  if (audioInputNote) {
+    audioInputNote.hidden = !isGenerate;
+    audioInputNote.textContent = showAudio
+      ? "这三项会写进润色后的提示词，不是单独的接口字段。音频文件不能作为输入。"
+      : "音频文件不能作为输入。对白、音效和音乐写在提示词里，由成片一起生成。";
+  }
+  genTabs.hidden = !isGenerate;
+  videoRefs.hidden = !showVideos;
+  refsSection.hidden = !showImages;
+  testGcsBtn.hidden = !(isGenerate && showImages);
+  addImageBtn.hidden = !(showImages && (!isGenerate || guide.slots === "n"));
+  uploadImagesBtn.hidden = !showImages;
+  if (showImages && isGenerate) {
+    refsTitle.textContent = guide.refsTitle;
+    refsHint.textContent = guide.refsHint;
+    filePicker.multiple = guide.slots === "n" || guide.slots === 2;
+  } else if (showImages) {
+    refsTitle.textContent = mode === "extend" ? "续写参考图" : "编辑参考图";
+    refsHint.textContent = `最多 ${profile.edit_reference_images_max} 张，可选。只有指令里写了 @图片1 才会随这次请求上传。`;
+    filePicker.multiple = true;
+    if (!imageListEl.children.length) addImageRow({ label: "@图片1" });
+  }
+
+  seedField.hidden = !showSeed;
+  labelsField.hidden = !showLabels;
+  statefulField.hidden = !showStateful;
+  if (advancedEl) advancedEl.hidden = !(showSeed || showLabels || showStateful);
+  if (advancedSummaryEl) {
+    const bits = [];
+    if (showSeed) bits.push("Seed");
+    if (showLabels) bits.push("计费标签");
+    if (showStateful) bits.push("多轮编辑");
+    advancedSummaryEl.textContent = bits.join("、");
+  }
+  if (advancedHintEl && (showSeed || showLabels || showStateful)) {
+    const lines = [];
+    if (showSeed || showLabels) lines.push("Seed 与 labels 只随当前这次请求发送。");
+    if (showStateful) lines.push("多轮编辑沿用上一条 interaction，大约保留 7 天。");
+    advancedHintEl.textContent = lines.join("");
+  }
+  if (durationNameEl) durationNameEl.textContent = mode === "extend" ? "本次追加" : "成片时长";
+  if (resolutionNameEl) {
+    resolutionNameEl.textContent =
+      mode === "upscale" ? "目标分辨率" : mode === "continue" || mode === "edit" ? "输出分辨率" : "分辨率";
+  }
 }
 
 function editGuideNote(profile) {
@@ -558,23 +633,8 @@ function setGenTask(kind) {
   genTabs.querySelectorAll("[data-gen]").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.gen === kind);
   });
-  const isGenerate = currentMode === "generate";
-  genTabs.hidden = !isGenerate;
-  const g = GEN_GUIDE[kind];
-  const showRefs = isGenerate && g.slots !== 0;
-  refsSection.hidden = !showRefs;
-  testGcsBtn.hidden = !showRefs;
-  addImageBtn.hidden = g.slots !== "n";
-  uploadImagesBtn.hidden = !showRefs;
-  if (showRefs) {
-    refsTitle.textContent = g.refsTitle;
-    refsHint.textContent = g.refsHint;
-    filePicker.multiple = g.slots === "n" || g.slots === 2;
-    syncImageSlots();
-  }
-  const showVideos =
-    isGenerate && kind === "reference_to_video" && activeProfile().reference_videos_max > 0;
-  videoRefs.hidden = !showVideos;
+  const guide = GEN_GUIDE[kind];
+  if (currentMode === "generate" && guide && guide.slots !== 0) syncImageSlots();
   applyGuide();
   applyDurationForMode();
   applyCapabilityChrome();
@@ -661,33 +721,10 @@ function setMode(mode) {
   });
 
   const isGenerate = mode === "generate";
-  sourceBox.hidden = isGenerate;
-  sourceVideoField.hidden = isGenerate;
-  audioToggles.hidden = !isGenerate;
-  durationField.hidden = mode === "continue" || mode === "edit" || mode === "upscale";
-  // Official extend uses response_format.duration; resolution follows the source.
-  resolutionField.hidden = mode === "extend";
-  aspectField.hidden = !isGenerate;
-  if (promptField) promptField.hidden = mode === "upscale";
-  enhanceToggle.hidden = !(isGenerate || mode === "extend");
 
   if (isGenerate) {
     setGenTask(currentGenTask);
   } else {
-    genTabs.hidden = true;
-    videoRefs.hidden = true;
-    const editRefs =
-      activeProfile().edit_reference_images_max > 0 && mode !== "upscale";
-    refsSection.hidden = !editRefs;
-    testGcsBtn.hidden = true;
-    addImageBtn.hidden = !editRefs;
-    uploadImagesBtn.hidden = !editRefs;
-    if (editRefs) {
-      refsTitle.textContent = "可选参考图";
-      refsHint.textContent = `最多 ${activeProfile().edit_reference_images_max} 张，可选。只有指令里写了 @图片1 才会上传；公网地址由服务端下载。`;
-      filePicker.multiple = true;
-      if (!imageListEl.children.length) addImageRow({ label: "@图片1" });
-    }
     applyGuide();
     applyDurationForMode();
     applyCapabilityChrome();
@@ -1571,7 +1608,7 @@ async function regenerateFromJob(job) {
     generate_audio: document.getElementById("generateAudio").checked,
     no_subtitles: document.getElementById("noSubtitles").checked,
     no_bgm: document.getElementById("noBgm").checked,
-    enhance_prompt: enhancePromptEl.checked,
+    enhance_prompt: !enhanceToggle.hidden && enhancePromptEl.checked,
     image_urls: [],
     reference_images: [],
   };
@@ -1671,7 +1708,7 @@ async function submitJob() {
       image_urls: [],
       reference_images: [],
       reference_videos: [],
-      enhance_prompt: enhancePromptEl.checked,
+      enhance_prompt: !enhanceToggle.hidden && enhancePromptEl.checked,
       generate_task: currentMode === "generate" ? currentGenTask : undefined,
       ...requestExtras(),
     };
@@ -1745,6 +1782,7 @@ async function submitJob() {
   }
 }
 
+enhancePromptEl.addEventListener("change", () => syncVisibleFields());
 document.querySelectorAll("#modeTabs .mode-tab").forEach((btn) => {
   btn.addEventListener("click", () => setMode(btn.dataset.mode));
 });

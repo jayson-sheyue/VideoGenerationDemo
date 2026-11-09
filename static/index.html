@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Manrope:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/static/style.css?v=28" />
+    <link rel="stylesheet" href="/static/style.css?v=29" />
   </head>
   <body>
     <div class="noise" aria-hidden="true"></div>
@@ -107,11 +107,11 @@
 
         <div class="grid-3" id="mediaControls">
           <label class="field" id="durationField">
-            <span>Duration</span>
+            <span id="durationName">成片时长</span>
             <select id="duration"></select>
           </label>
           <label class="field" id="resolutionField">
-            <span>Resolution</span>
+            <span id="resolutionName">分辨率</span>
             <select id="resolution">
               <option value="360p">360p</option>
               <option value="720p" selected>720p</option>
@@ -129,7 +129,7 @@
         </div>
 
         <details class="advanced" id="advanced">
-          <summary>Seed、计费标签、多轮状态</summary>
+          <summary id="advancedSummary">Seed、计费标签</summary>
           <div class="grid-3 advanced-grid">
             <label class="field" id="seedField">
               <span>Seed</span>
@@ -158,19 +158,19 @@
           >
         </div>
 
-        <div class="toggles" id="audioToggles">
+        <div class="toggles" id="audioToggles" hidden>
           <label class="check"
-            ><input type="checkbox" id="generateAudio" checked /> generate_audio</label
+            ><input type="checkbox" id="generateAudio" checked /> 对白与音效</label
           >
           <label class="check"
-            ><input type="checkbox" id="noSubtitles" checked /> no subtitles</label
+            ><input type="checkbox" id="noSubtitles" checked /> 不要烧录字幕</label
           >
           <label class="check"
-            ><input type="checkbox" id="noBgm" checked /> no background music</label
+            ><input type="checkbox" id="noBgm" checked /> 不要背景音乐</label
           >
         </div>
         <p class="hint" id="audioInputNote">
-          音频文件不能作为输入。公开 API 未开放音频参考（Cloud 博客写明需 allowlist）。对白、音效和音乐写在提示词里，由成片一起生成。上方三个勾选不是请求字段，只有打开「自动润色」时才会写进提示词。
+          音频文件不能作为输入。对白、音效和音乐写在提示词里，由成片一起生成。
         </p>
 
         <div id="refsSection">
@@ -289,6 +289,6 @@
       </section>
     </main>
 
-    <script src="/static/app.js?v=34"></script>
+    <script src="/static/app.js?v=35"></script>
   </body>
 </html>
