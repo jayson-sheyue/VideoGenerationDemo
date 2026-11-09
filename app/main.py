@@ -30,8 +30,6 @@ from app.model_catalog import (
     CATALOG,
     SEED_MAX,
     duration_bounds,
-    extend_live_source_message,
-    extend_source_over_live_limit,
     normalize_labels,
     profile_for,
     resolve_model,
@@ -406,10 +404,6 @@ async def generate(body: GenerateRequest) -> dict:
                     f"Cannot upscale a {source_res} clip to {body.resolution}. "
                     f"Official targets from {source_res}: {legal}.",
                 )
-        if mode == "extend" and src.duration_sec is not None:
-            same_clip = not requested_source or requested_source == (src.video_uri or "")
-            if same_clip and extend_source_over_live_limit(src.duration_sec):
-                raise HTTPException(400, extend_live_source_message(src.duration_sec))
 
     if mode in source_modes and not previous_interaction_id and not (
         source_video and source_video.startswith("gs://")

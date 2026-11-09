@@ -16,7 +16,7 @@
 | **Generate → References** | `reference_to_video` | 参考图，以及最多 3 段参考视频（不当首帧，也不当剪辑源） |
 | **Continue edit** | `edit` | 1.2 默认用上一条 interaction 多轮再改；也可改回重传 `gs://` |
 | **Edit video** | `edit` | 指定任意 `gs://` 源视频做单次局部改动。1.2 可再挂最多 2 张参考图 |
-| **Extend** | `extend` | 片尾续写 3–10 秒，返回拼接后的完整成片。官方写 1.2 源片任意长度；**当前线上超过约 24 秒会失败**，本 Demo 会在提交前拦住。成片总长约 ≤ 40 秒 |
+| **Extend** | `extend` | 片尾续写 3–10 秒，返回拼接后的完整成片。**1.2 源片可为任意长度**；**1.1 本 Demo 仍要求 ≤ 30 秒**。成片总长约 ≤ 40 秒 |
 | **Upscale** | `upscale` | 仅 1.2。把不超过 15 秒的成片放大到更高分辨率 |
 
 1.2 的生成和编辑是 **3–15 秒**（首尾帧仍是 3–10 秒）。1.1 仍是 **3–10 秒**。音频文件不能当输入；对白、音效和音乐写在提示词里。
@@ -103,7 +103,7 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 - **First + last**：两张图分别是开场和收束，模型在中间插值运镜。API 仍是 `image_to_video`。
 - **References**：图锁定人物/画风，**不当**第一帧。分镜用 `@图片N` 绑定。
 - **Continue / Edit**：`task=edit`。1.2 源片最长 **15 秒**，1.1 最长 **10 秒**。指令宜短。1.2 可附最多 2 张参考图。
-- **Extend**：本次续写 **3–10s**（不是 15s）。官方写源片任意长度，但有两层含义要分开：**看约 10 秒**（上下文）和 **留约 30 秒**（成片里保留的源片末尾）；更早画面会裁掉，再接上新段，成片约 ≤ **40 秒**。当前线上超过约 **24 秒**会在生成阶段返回 Internal error，本 Demo 提交前拦住，不裁短源片。不要按「15+15+15」规划到 45 秒。
+- **Extend**：本次续写 **3–10s**（不是 15s）。**1.2** 源片可为任意长度，但有两层含义要分开：**看约 10 秒**（上下文）和 **留约 30 秒**（成片里保留的源片末尾）；更早画面会裁掉，再接上新段，成片约 ≤ **40 秒**。**1.1** 在本 Demo 里仍拦截超过 30 秒的源片。不要按「15+15+15」规划到 45 秒。
 - **Upscale**：仅 1.2，`task=upscale`，源片不超过 15 秒。请求不带文字，只把分辨率提高到比源片更高的一档。官方建议先用 360p / 720p 出草稿，再放大到 1080p 或 4K。这不是 Cloud Transcoder 的转码。
 - **Seed / Labels**：仅 1.2。Seed 写入 `generation_config.seed`；labels 用小写 `key=value`，用来给账单分组。
 
@@ -200,7 +200,7 @@ learning_guide.md        Omni 能力与提示词
 - 生成慢，请当异步任务用，不要把 HTTP 超时设太短。
 - 对白靠提示词约束；Omni **没有** Veo 那种独立的 `generate_audio` 字段。打开「Generate dialogue」类措辞容易多出旁白，本 Demo 会按分镜里的引号锁台词。
 - 当前 API **不支持改配音 / 改对白内容**（画面编辑可以）。
-- 续写请求按官方：成片 + `task=extend`，`response_format.duration` 为本次追加 3–10 秒。文档里的 `aspect_ratio` 线上会拒，本 Demo 不传。超过约 **24 秒**的源片会在提交前被拒绝；源片保持原长，不裁短后再送。
+- 续写按官方：**源片任意长度**；`response_format.duration` 为本次追加 3–10 秒。文档里的 `aspect_ratio` 线上会拒，本 Demo 不传。**不会**为规避错误而裁短源片。
 - 编辑过长视频会返回 `Editing duration N exceeds maximum duration …`。1.1 的上限是 10 秒，1.2 的模型卡片是 15 秒。
 - 音频参考没有入口。模型卡片写 Audio 输入不支持；Cloud 博客写明需 allowlist。
 - 放大请求使用 `task=upscale`，input 只有源视频。带文字会返回 `Text input is not supported for upscale task`。

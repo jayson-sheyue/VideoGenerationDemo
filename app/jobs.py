@@ -11,14 +11,7 @@ from typing import Any
 
 from app import omni_client, prompt_enhancer
 from app.config import OUTPUT_DIR, gcs_prefix_for_inputs, settings
-from app.model_catalog import (
-    EXTEND_LIVE_SOURCE_MAX_SEC,
-    ModelProfile,
-    extend_live_source_message,
-    extend_source_over_live_limit,
-    profile_for,
-    upscale_targets,
-)
+from app.model_catalog import ModelProfile, profile_for, upscale_targets
 from app.gcs_util import (
     mvhd_duration_sec,
     build_input_object_uri,
@@ -359,22 +352,10 @@ async def _submit_and_finalize(job: Job, *, payload: dict[str, Any]) -> None:
 def _done_message(job: Job) -> str:
     length = f"{job.duration_sec:g}s clip" if job.duration_sec else "Done"
     limit = _edit_limit(job)
-    too_long_edit = bool(job.duration_sec and job.duration_sec > limit + 0.05)
-    too_long_extend = extend_source_over_live_limit(job.duration_sec)
-    if too_long_edit and too_long_extend:
-        return (
-            f"Done — {length}; too long to Edit (max {limit:g}s) and too long for "
-            f"live Extend (about {EXTEND_LIVE_SOURCE_MAX_SEC:.0f}s; docs still say any length)"
-        )
-    if too_long_edit:
+    if job.duration_sec and job.duration_sec > limit + 0.05:
         return (
             f"Done — {length}; too long to Edit (max {limit:g}s for this model), "
             "Extend still works"
-        )
-    if too_long_extend:
-        return (
-            f"Done — {length}; live Extend rejects sources over about "
-            f"{EXTEND_LIVE_SOURCE_MAX_SEC:.0f}s"
         )
     return f"Done — {length}"
 
@@ -668,10 +649,6 @@ async def run_generation_job(
                 raise omni_client.OmniAPIError(
                     f"Source clip is {source_seconds:g}s but {api_task} on {model_id} "
                     f"accepts at most {limit:g}s."
-                )
-            if api_task == "extend" and extend_source_over_live_limit(source_seconds):
-                raise omni_client.OmniAPIError(
-                    extend_live_source_message(source_seconds)
                 )
             if (
                 api_task == "extend"

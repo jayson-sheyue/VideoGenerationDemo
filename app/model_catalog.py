@@ -30,8 +30,7 @@ class ModelProfile:
     edit_max: float
     extend_min: int
     extend_max: int
-    # None: the model card says any input length. The live API still fails past
-# EXTEND_LIVE_SOURCE_MAX_SEC; that guard is separate and does not trim.
+    # None: any input length; the model keeps up to the last 30s and extends that.
     extend_input_max: float | None
     # None: this demo will not send task=upscale.
     upscale_max: float | None
@@ -56,7 +55,6 @@ class ModelProfile:
             "extend_min": self.extend_min,
             "extend_max": self.extend_max,
             "extend_input_max": self.extend_input_max,
-            "extend_live_source_max": EXTEND_LIVE_SOURCE_MAX_SEC,
             "upscale_max": self.upscale_max,
             "reference_images_max": self.reference_images_max,
             "edit_reference_images_max": self.edit_reference_images_max,
@@ -188,30 +186,6 @@ def resolution_label(width: int, height: int) -> str | None:
     if short <= 1200:
         return "1080p"
     return "4k"
-
-
-# Official extend docs still say any input length. On 2026-11-09 the live
-# Interactions API accepted a progressive 30.037s Omni clip, wrote the
-# continuation plan, then failed with invalid_request "Internal error
-# encountered" for both an 8s and a 10s append. Shorter clips that day
-# extended successfully. Refuse before the call. Do not trim the file.
-EXTEND_LIVE_SOURCE_MAX_SEC = 24.0
-
-
-def extend_source_over_live_limit(seconds: float | None) -> bool:
-    if seconds is None:
-        return False
-    return seconds > EXTEND_LIVE_SOURCE_MAX_SEC + 0.05
-
-
-def extend_live_source_message(seconds: float) -> str:
-    cap = f"{EXTEND_LIVE_SOURCE_MAX_SEC:.0f}"
-    return (
-        f"这条片子 {seconds:.3f} 秒。请求会按官方续写发送（成片 + task=extend + 追加秒数）。"
-        f"当前线上对超过约 {cap} 秒的源片，会在生成阶段返回 "
-        "invalid_request: Internal error encountered，接不上新片段。"
-        f"请改用 {cap} 秒以内的成片再续写。"
-    )
 
 
 def duration_bounds(profile: ModelProfile, *, mode: str, generate_task: str | None) -> tuple[int, int]:

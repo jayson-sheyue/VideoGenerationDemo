@@ -104,8 +104,8 @@
           </tr>
           <tr>
             <td>续写 · 源片</td>
-            <td>模型卡片写<strong>任意长度</strong>。当前线上超过约 <strong>24 秒</strong>会在生成阶段返回 Internal error，本 Demo 提交前拦住，不裁短源片</td>
-            <td>卡片未单独写 Any duration。本 Demo 同样按线上约 24 秒拦住（文档上的 30 秒更松）</td>
+            <td><strong>任意长度</strong>（模型卡片 <code>extension: Any duration</code>）</td>
+            <td>本 Demo <strong>仍拦截 &gt; 30 秒</strong>。1.1 卡片未单独写 Any duration，且已 Deprecated</td>
           </tr>
           <tr>
             <td>续写 · 怎么用源片</td>
@@ -224,7 +224,7 @@
       <ul>
         <li>实验台右上角可换模型。自定义 ID 会原样发给接口，控件按 ID 里是否包含 1.2 来套用上限。</li>
         <li>Generate 的四种任务、Continue / Edit、Extend 都还在。1.2 的 Continue / Edit 默认走多轮 interaction，且这一轮不带 <code>video_config.task</code>；取消勾选就改回重传 <code>gs://</code>。Extend 始终重传成片并带 <code>task=extend</code>。</li>
-        <li>切到 Extend 时，实验台说明官方任意长度，并在源片超过约 24 秒时拦住。单次新增永远是 3–10 秒，成片约 ≤ 40 秒。</li>
+        <li>切到 Extend 时，实验台会按当前模型显示源片上限：1.2 为任意长度（成片约 ≤ 40 秒）；1.1 仍拦 30 秒。单次新增永远是 3–10 秒。</li>
         <li>References 可以再挂最多 3 段参考视频。编辑和续写在 1.2 上可以再挂最多 2 张参考图。</li>
         <li>Upscale 只发给 1.2，并且重传成片、带 <code>task=upscale</code>。源片超过 15 秒会在提交前拦住。目标分辨率按官方阶梯：360p → 720p/1080p，720p → 1080p/4k，1080p → 4k 不支持。提示词框会藏起来，请求不带 <code>type: text</code>。</li>
         <li>Seed 和 labels 只在 1.2 上出现。labels 要用小写的 <code>key=value</code>。</li>

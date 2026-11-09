@@ -16,7 +16,7 @@ Model limits and prompt patterns: [learning_guide.md](./learning_guide.md) (Chin
 | **Generate → References** | `reference_to_video` | Up to 10 stills and 3 reference clips (not first frames, not an edit source) |
 | **Continue edit** | `edit` | 1.2 defaults to chaining the prior interaction; can fall back to re-sending `gs://` |
 | **Edit video** | `edit` | Edit any `gs://` source. 1.2 may attach up to 2 reference images |
-| **Extend** | `extend` | Append 3–10s and return the concatenated clip. Official 1.2 input is any length; **the live API fails past about 24s**, and this demo refuses those before calling. Output is about ≤ **40s** |
+| **Extend** | `extend` | Append 3–10s and return the concatenated clip. **1.2 accepts any-length input**; **this demo still caps 1.1 at ≤ 30s**. Output is about ≤ **40s** |
 | **Upscale** | `upscale` | 1.2 only. Raise resolution for clips ≤ 15s. No text input |
 
 1.2 generate/edit is **3–15s** (first+last frames stay 3–10s). 1.1 stays **3–10s**. Audio files are not inputs; dialogue / SFX / music belong in the prompt.
@@ -27,7 +27,7 @@ Official sources: [Extend videos](https://docs.cloud.google.com/gemini-enterpris
 
 | | Omni 1.2 Flash | Omni 1.1 in this demo |
 | --- | --- | --- |
-| Extend **input** | Docs: **any duration**. Live API fails past about **24s**; this demo refuses that before calling | Same live **24s** refusal (the older 30s demo cap is looser) |
+| Extend **input** | **Any duration** | Still blocked above **30s** |
 | **Watch** (~10s) | Model uses about the **last 10s** only as context for what happens next | Same idea once a clip is accepted |
 | **Keep** (~30s) | Output keeps about the **last 30s** of the source, then appends the new segment; earlier footage is dropped | Same ~40s ceiling |
 | Per-call add | **3–10s** (not 15s) | Same 3–10s |
@@ -74,7 +74,7 @@ Open http://127.0.0.1:8000 . Generation is usually 1–3+ minutes; the UI polls 
 
 - Modes keep their own prompt, duration, resolution, and reference-image list so out-of-order walks (Generate → Upscale → Edit → Extend) stay valid.
 - Edit / Continue / Extend only upload optional reference images when the instruction cites `@图片N`.
-- Switching to **Extend** shows the official any-length rule and the live refusal past about 24s.
+- Switching to **Extend** shows the active model’s input rule (any-length on 1.2 vs ≤30s on 1.1).
 
 ## Deploy to Cloud Run
 
@@ -89,7 +89,7 @@ Optional: `REGION`, `SERVICE`, `OMNI_MODEL`, `ALLOW_UNAUTHENTICATED=false`. The 
 - Slow generations—treat as async jobs.
 - No Veo-style `generate_audio` flag; dialogue is prompt-locked.
 - Voice / dialogue content cannot be edited; picture edits can.
-- Extend follows the official request: source video, `task=extend`, and `response_format.duration` as the 3–10s append. Live rejects `aspect_ratio` on extend — this demo does not send it. A progressive 30s Omni clip still fails in generation with `invalid_request: Internal error encountered`. This demo refuses sources over about **24s** before calling and does not trim them.
+- Extend follows the official contract: **any-length** source; `response_format.duration` is the append length (3–10s). Live rejects `aspect_ratio` on extend — this demo does not send it. The demo does **not** pre-trim long sources.
 - Upscale rejects any text part.
 - After upscale, Edit / Extend must re-send `gs://`.
 - Failed Omni interactions surface the API `errors` text in the job message.
