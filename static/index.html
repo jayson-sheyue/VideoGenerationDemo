@@ -1,294 +1,577 @@
-<!DOCTYPE html>
-<html lang="zh-CN">
+<!doctype html>
+<html lang="en">
   <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Omni Flash Video Lab</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Omni Studio · Video Lab</title>
     <link
-      href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Manrope:wght@400;500;600;700&display=swap"
-      rel="stylesheet"
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23276b53'/%3E%3Ccircle cx='15' cy='17' r='7' fill='none' stroke='%23fff' stroke-width='3'/%3E%3Cpath d='M24 4l1.3 3.2L28.5 8.5l-3.2 1.3L24 13l-1.3-3.2L19.5 8.5l3.2-1.3z' fill='%23fff'/%3E%3C/svg%3E"
     />
-    <link rel="stylesheet" href="/static/style.css?v=29" />
+    <link rel="stylesheet" href="/static/style.css?v=45" />
   </head>
   <body>
-    <div class="noise" aria-hidden="true"></div>
-    <header class="top">
-      <div class="brand">
-        <span class="brand-mark">OF</span>
-        <div>
-          <p class="brand-name">Omni Flash Video Lab</p>
-          <p class="brand-sub" id="brandSub">1.2 Flash · 15s gen/edit · extend any-length in → ~40s out · upscale</p>
-        </div>
-      </div>
-      <nav class="site-nav" aria-label="页面">
-        <a href="/" aria-current="page">实验台</a>
-        <a href="/docs">官方文档</a>
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Omni Studio"
+        ><span class="brand-mark" aria-hidden="true">O<span>✦</span></span
+        ><span>Omni <b>Studio</b><small>GEMINI VIDEO LAB</small></span></a
+      >
+      <nav class="main-nav" aria-label="Main navigation">
+        <button data-view="studio" class="active" data-i18n="studio">
+          Studio
+        </button>
+        <button data-view="library" data-i18n="library">Portfolio</button>
+        <button data-view="tasks">
+          <span data-i18n="tasks">Tasks</span
+          ><span id="activeCount" class="count" hidden></span>
+        </button>
+        <button data-view="reference" data-i18n="reference">API guide</button>
       </nav>
-      <div class="health" id="health">Checking GCP…</div>
+      <button id="settingsButton" class="workspace-button">
+        <span class="live-dot" aria-hidden="true"></span
+        ><span data-i18n="workspace">Workspace</span
+        ><span aria-hidden="true">⌘</span>
+      </button>
     </header>
-
-    <main class="layout">
-      <section class="panel compose">
-        <div class="panel-head">
-          <h1>Compose</h1>
-          <button type="button" class="ghost" id="loadExample">Load example</button>
-        </div>
-
-        <div class="model-bar">
-          <label class="field">
-            <span>Model</span>
-            <select id="modelSelect">
-              <option value="gemini-omni-1.2-flash" selected>Omni 1.2 Flash · GA</option>
-              <option value="gemini-omni-1.1-flash-preview">Omni 1.1 Flash · Preview</option>
-              <option value="custom">自定义模型 ID</option>
-            </select>
-          </label>
-          <label class="field" id="customModelField" hidden>
-            <span>Model ID</span>
-            <input id="customModel" type="text" spellcheck="false" placeholder="gemini-omni-…" />
-          </label>
-        </div>
-        <p class="hint tight" id="modelNote">
-          1.2 正式版：生成/编辑 3–15 秒；续写源片可为任意长度，单次只加 3–10 秒，成片约 ≤ 40 秒；可多轮编辑与放大。
-        </p>
-
-        <div class="mode-tabs" id="modeTabs" role="tablist" aria-label="Omni workflow">
-          <button type="button" class="mode-tab active" data-mode="generate">Generate</button>
-          <button type="button" class="mode-tab" data-mode="continue">Continue edit</button>
-          <button type="button" class="mode-tab" data-mode="edit">Edit video</button>
-          <button type="button" class="mode-tab" data-mode="extend">Extend</button>
-          <button type="button" class="mode-tab" data-mode="upscale">Upscale</button>
-        </div>
-
-        <div class="mode-tabs gen-tabs" id="genTabs" role="tablist" aria-label="Generate task">
-          <button type="button" class="mode-tab active" data-gen="text_to_video">Text → video</button>
-          <button type="button" class="mode-tab" data-gen="image_to_video">First frame</button>
-          <button type="button" class="mode-tab" data-gen="frames_to_video">First + last</button>
-          <button type="button" class="mode-tab" data-gen="reference_to_video">References</button>
-        </div>
-
-        <aside class="guide" id="modeGuide">
-          <p class="guide-title" id="guideTitle">Text → video — 纯文本生成</p>
-          <p class="guide-task" id="guideTask"><code>task=text_to_video</code></p>
-          <ol class="guide-steps" id="guideSteps"></ol>
-          <p class="guide-note" id="guideNote"></p>
-        </aside>
-
-        <div class="example-row" id="exampleRow">
-          <p class="example-label">试用示例</p>
-          <div class="example-chips" id="exampleChips"></div>
-        </div>
-
-        <div class="source-box" id="sourceBox" hidden>
-          <label class="field">
-            <span>Source job / interaction</span>
-            <input
-              id="sourceJobId"
-              type="text"
-              placeholder="从右侧任务列表中选择，或直接填写 job id"
-            />
-          </label>
-          <label class="field" id="sourceVideoField" hidden>
-            <span>source video (gs://)</span>
-            <input id="sourceVideoUri" type="text" placeholder="gs://…/omni-output/….mp4" />
-          </label>
-        </div>
-
-        <label class="field" id="promptField">
-          <span id="promptLabel">Prompt</span>
-          <textarea
-            id="prompt"
-            rows="10"
-            placeholder="粘贴分镜提示词与参考图 URL 数组，系统会自动解析并填充下方参考图列表。"
-          ></textarea>
-        </label>
-
-        <div class="grid-3" id="mediaControls">
-          <label class="field" id="durationField">
-            <span id="durationName">成片时长</span>
-            <select id="duration"></select>
-          </label>
-          <label class="field" id="resolutionField">
-            <span id="resolutionName">分辨率</span>
-            <select id="resolution">
-              <option value="360p">360p</option>
-              <option value="720p" selected>720p</option>
-              <option value="1080p">1080p</option>
-              <option value="4k">4k</option>
-            </select>
-          </label>
-          <label class="field" id="aspectField">
-            <span>Aspect</span>
-            <select id="aspectRatio">
-              <option value="16:9" selected>16:9 anamorphic</option>
-              <option value="9:16">9:16</option>
-            </select>
-          </label>
-        </div>
-
-        <details class="advanced" id="advanced">
-          <summary id="advancedSummary">Seed、计费标签</summary>
-          <div class="grid-3 advanced-grid">
-            <label class="field" id="seedField">
-              <span>Seed</span>
-              <input id="seed" type="number" min="0" max="4294967295" step="1" placeholder="留空则不固定" />
-            </label>
-            <label class="field" id="labelsField">
-              <span>Labels</span>
-              <input id="labels" type="text" placeholder="team=demo, cost=lab" />
-            </label>
-            <label class="check stateful-check" id="statefulField">
-              <input type="checkbox" id="stateful" checked />
-              多轮编辑（不重传成片）
-            </label>
-          </div>
-          <p class="hint tight" id="advancedHint">
-            Seed 与 labels 只在 Omni 1.2 上发送。多轮编辑需要上一条任务的 interaction id，服务端大约保留 7 天。
-          </p>
-        </details>
-
-        <div class="toggles" id="enhanceToggle">
-          <label class="check"
-            ><input type="checkbox" id="enhancePrompt" /> 自动润色提示词</label
-          >
-          <span class="hint tight" id="enhanceHint"
-            >无参考图时会补运镜与转场；有参考图时不改分镜原文，只追加动作说明。</span
-          >
-        </div>
-
-        <div class="toggles" id="audioToggles" hidden>
-          <label class="check"
-            ><input type="checkbox" id="generateAudio" checked /> 对白与音效</label
-          >
-          <label class="check"
-            ><input type="checkbox" id="noSubtitles" checked /> 不要烧录字幕</label
-          >
-          <label class="check"
-            ><input type="checkbox" id="noBgm" checked /> 不要背景音乐</label
-          >
-        </div>
-        <p class="hint" id="audioInputNote">
-          音频文件不能作为输入。对白、音效和音乐写在提示词里，由成片一起生成。
-        </p>
-
-        <div id="refsSection">
-          <div class="refs-head">
-            <h2 id="refsTitle">Reference images</h2>
-            <div class="refs-actions">
-              <button type="button" class="ghost" id="addImage">+ Add URL</button>
-              <button type="button" class="ghost" id="uploadImages">Upload files</button>
-            </div>
-          </div>
-          <p class="hint" id="refsHint">
-            可粘贴公网 URL，或直接从本地上传。浏览器读不到的地址会改由服务端下载，再上传到 GCS。
-          </p>
-          <input
-            id="filePicker"
-            type="file"
-            accept="image/png,image/jpeg,image/webp,image/gif,image/heic,image/heif"
-            multiple
-            hidden
-          />
-          <div id="imageList" class="image-list"></div>
-        </div>
-
-        <div id="videoRefs" hidden>
-          <div class="refs-head">
-            <h2>Reference videos</h2>
-            <div class="refs-actions">
-              <button type="button" class="ghost" id="addVideo">+ gs:// clip</button>
-              <button type="button" class="ghost" id="uploadVideos">Upload clips</button>
-            </div>
-          </div>
-          <p class="hint" id="videoHint">
-            最多 3 段，用来锁人物、动作或风格，不当源片去剪辑。参考视频里的声音会被忽略。Gemini API 建议每段大约不超过 3 秒。
-          </p>
-          <input
-            id="videoPicker"
-            type="file"
-            accept="video/mp4,video/webm,video/quicktime,video/mpeg"
-            multiple
-            hidden
-          />
-          <div id="videoList" class="image-list"></div>
-        </div>
-
-        <div class="actions">
-          <button type="button" class="primary" id="generateBtn">Generate video</button>
-          <button type="button" class="ghost" id="testGcsBtn">Test GCS upload</button>
-          <p class="status-line" id="statusLine">Ready</p>
-        </div>
-      </section>
-
-      <section class="panel result">
-        <div class="panel-head">
-          <h1>Result</h1>
-          <span class="job-id" id="jobId"></span>
-        </div>
-
-        <div class="stage" id="stage">
-          <div class="stage-empty" id="stageEmpty">
-            <p class="stage-title">No clip yet</p>
-            <p class="stage-copy" id="stageEmptyCopy">
-              先选模型，再选文生 / 首帧 / 首尾帧 / 参考。成片之后可以继续编辑、续写，或把 360p / 720p 草稿放大。
+    <div id="connectionBanner" class="banner" role="status" hidden></div>
+    <main>
+      <section id="studioView" class="view">
+        <div class="page-heading">
+          <div>
+            <p class="eyebrow" data-i18n="eyebrow">
+              FROM FIRST IDEA TO FINAL FRAME
+            </p>
+            <h1 data-i18n="headline">Make something worth watching.</h1>
+            <p class="subtitle" data-i18n="intro">
+              Create, refine, and keep every version in one place.
             </p>
           </div>
-          <video id="player" controls playsinline hidden></video>
-        </div>
-
-        <div class="suggestions" id="suggestions" hidden>
-          <p class="suggestions-title" id="suggestionsTitle">下一步试试</p>
-          <div class="bubbles" id="suggestionBubbles"></div>
-        </div>
-
-        <div class="result-actions" id="resultActions" hidden>
-          <button type="button" class="ghost" id="regenBtn">重新生成</button>
-          <button type="button" class="ghost" id="useForContinue">以此结果继续编辑</button>
-          <button type="button" class="ghost" id="useForEdit">以此结果编辑</button>
-          <button type="button" class="ghost" id="useForExtend">以此结果续写</button>
-          <button type="button" class="ghost" id="useForUpscale">以此结果放大</button>
-        </div>
-
-        <div class="comparison" id="comparison" hidden>
-          <div class="comparison-head">
-            <h2>Comparison</h2>
-            <div class="comparison-tools">
-              <button type="button" class="ghost" id="playAllBtn">同步播放</button>
-              <button type="button" class="ghost" id="resetAllBtn">回到开头</button>
-            </div>
+          <div class="model-badge">
+            <span class="live-dot"></span
+            ><span id="modelBadge">Omni 1.2 Flash</span>
           </div>
-          <p class="hint tight" id="comparisonHint"></p>
-          <div class="comparison-grid" id="comparisonGrid"></div>
         </div>
-
-        <div class="meta-block">
-          <h2>Job log</h2>
-          <pre id="jobLog">—</pre>
+        <div class="studio-grid">
+          <section class="composer surface" aria-labelledby="composeTitle">
+            <div class="section-head">
+              <h2 id="composeTitle" data-i18n="create">Create a clip</h2>
+              <span id="draftStatus" class="subtle" aria-live="polite"></span>
+            </div>
+            <div
+              id="capabilities"
+              class="capabilities"
+              role="group"
+              aria-label="Video capabilities"
+            ></div>
+            <div class="capability-note">
+              <strong id="capabilityTitle"></strong>
+              <p id="capabilityHelp"></p>
+              <a
+                id="capabilityDoc"
+                target="_blank"
+                rel="noopener"
+                data-i18n="officialGuide"
+                >Official guide ↗</a
+              >
+            </div>
+            <div id="sourceSection" class="source-section" hidden>
+              <label
+                ><span data-i18n="sourceWork">Source work</span
+                ><select id="sourceJob">
+                  <option value="" data-i18n="chooseSource">
+                    Choose a completed clip…
+                  </option>
+                </select></label
+              >
+              <div id="sourceSummary" class="source-summary" hidden></div>
+              <details>
+                <summary data-i18n="externalSource">
+                  Or use your own video
+                </summary>
+                <label
+                  ><span>Cloud Storage URI</span
+                  ><input
+                    id="sourceUri"
+                    placeholder="gs://your-bucket/clip.mp4"
+                    spellcheck="false" /></label
+                ><label class="upload-zone compact"
+                  ><input
+                    id="sourceFile"
+                    type="file"
+                    accept="video/mp4,video/webm,video/quicktime"
+                  /><span data-i18n="uploadSource"
+                    >Upload source video · up to 20 MB</span
+                  ></label
+                >
+                <p id="sourceFileName" class="subtle"></p>
+              </details>
+            </div>
+            <div id="promptSection">
+              <div class="label-row">
+                <label for="prompt" id="promptLabel" data-i18n="prompt"
+                  >Your direction</label
+                ><button
+                  id="exampleButton"
+                  class="text-button"
+                  data-i18n="example"
+                >
+                  Try an example
+                </button>
+              </div>
+              <textarea
+                id="prompt"
+                rows="6"
+                maxlength="30000"
+                data-i18n-placeholder="promptPlaceholder"
+                placeholder="Describe your scene, camera movement, and sound…"
+              ></textarea>
+            </div>
+            <div id="imageSection" class="media-section" hidden>
+              <div class="label-row">
+                <span id="imageLabel" data-i18n="images">Reference images</span
+                ><span id="imageCount" class="subtle"></span>
+              </div>
+              <div id="imageItems" class="attachments"></div>
+              <div class="attachment-actions">
+                <label class="file-button"
+                  ><input
+                    id="imageFiles"
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp,image/heic,image/heif"
+                    multiple
+                  /><span data-i18n="uploadImages">+ Upload images</span></label
+                ><button
+                  id="addImageUrl"
+                  class="text-button"
+                  data-i18n="addUrl"
+                >
+                  + Image URL
+                </button>
+              </div>
+              <p id="imageHelp" class="subtle"></p>
+            </div>
+            <div id="videoSection" class="media-section" hidden>
+              <div class="label-row">
+                <span data-i18n="videoRefs">Reference clips</span
+                ><span class="subtle">0–3 · ≤20 MB/file</span>
+              </div>
+              <div id="videoItems" class="attachments"></div>
+              <label class="file-button"
+                ><input
+                  id="videoFiles"
+                  type="file"
+                  accept="video/mp4,video/webm,video/quicktime"
+                  multiple
+                /><span data-i18n="uploadVideos">+ Upload clips</span></label
+              ><button id="addVideoUri" class="text-button">+ gs:// URI</button>
+            </div>
+            <div class="parameter-grid">
+              <label id="durationField"
+                ><span id="durationLabel" data-i18n="duration">Duration</span
+                ><select id="duration"></select></label
+              ><label id="resolutionField"
+                ><span data-i18n="resolution">Resolution</span
+                ><select id="resolution"></select></label
+              ><label id="aspectField"
+                ><span data-i18n="aspect">Aspect ratio</span
+                ><select id="aspect">
+                  <option>16:9</option>
+                  <option>9:16</option>
+                </select></label
+              >
+            </div>
+            <details id="advanced" class="advanced">
+              <summary data-i18n="advanced">Model & advanced options</summary>
+              <label
+                ><span data-i18n="model">Model</span
+                ><select id="model">
+                  <option value="gemini-omni-1.2-flash">
+                    Omni 1.2 Flash · GA
+                  </option>
+                  <option value="gemini-omni-1.1-flash-preview">
+                    Omni 1.1 Flash · Legacy preview
+                  </option>
+                  <option value="custom" data-i18n="customModel">
+                    Custom model ID
+                  </option>
+                </select></label
+              ><label id="customModelField" hidden
+                ><span>Model ID</span
+                ><input id="customModel" placeholder="gemini-omni-…"
+              /></label>
+              <div class="parameter-grid">
+                <label id="seedField"
+                  ><span>Seed</span
+                  ><input
+                    id="seed"
+                    type="number"
+                    min="0"
+                    max="4294967295"
+                    step="1"
+                    data-i18n-placeholder="optional"
+                    placeholder="Optional" /></label
+                ><label id="labelsField"
+                  ><span data-i18n="labels">Billing labels</span
+                  ><input id="labels" placeholder="team=demo, purpose=preview"
+                /></label>
+              </div>
+              <label id="statefulField" class="check" hidden
+                ><input id="stateful" type="checkbox" checked /><span
+                  data-i18n="stateful"
+                  >Continue the stored interaction when available</span
+                ></label
+              ><label id="enhanceField" class="check"
+                ><input id="enhance" type="checkbox" /><span data-i18n="enhance"
+                  >Polish the prompt</span
+                ></label
+              >
+              <p id="enhanceHelp" data-i18n="enhanceHelp" class="subtle">
+                Optional prompt assistance. The exact submitted prompt is kept
+                in task details.
+              </p>
+              <p id="modelHelp" class="subtle"></p>
+            </details>
+            <div id="formError" class="form-error" role="alert" hidden></div>
+            <div class="submit-bar">
+              <button id="generate" class="primary">
+                <span data-i18n="generate">Generate clip</span
+                ><span aria-hidden="true">↗</span>
+              </button>
+              <p class="subtle" data-i18n="submitHelp">
+                Runs in the background. You can keep browsing your work.
+              </p>
+            </div>
+          </section>
+          <div id="previewHost" class="preview-host"></div>
         </div>
-
-        <div class="meta-block" id="promptBlock" hidden>
-          <h2>Prompt sent to Omni</h2>
-          <p class="hint tight" id="promptDiffNote"></p>
-          <pre id="promptSent">—</pre>
+      </section>
+      <section id="libraryView" class="view" hidden>
+        <div class="page-heading">
+          <div>
+            <p class="eyebrow" data-i18n="yourCollection">
+              YOUR CREATIVE COLLECTION
+            </p>
+            <h1 data-i18n="library">Portfolio</h1>
+            <p class="subtitle" data-i18n="libraryIntro">
+              Every version, ready for its next chapter.
+            </p>
+          </div>
+          <button class="primary" data-action="new" data-i18n="newWork">
+            + New work
+          </button>
         </div>
-
-        <div class="meta-block" id="thoughtsBlock" hidden>
-          <h2>Model thoughts</h2>
-          <pre id="thoughts">—</pre>
+        <div class="collection-toolbar">
+          <label class="search-field"
+            ><span aria-hidden="true">⌕</span
+            ><input
+              id="librarySearch"
+              type="search"
+              data-i18n-placeholder="search"
+              placeholder="Search titles, prompts, or collections" /></label
+          ><label
+            ><span class="sr-only" data-i18n="collection">Collection</span
+            ><select id="collectionFilter">
+              <option value="" data-i18n="allCollections">
+                All collections
+              </option>
+            </select></label
+          ><select id="libraryFilter" aria-label="Portfolio filter">
+            <option value="all" data-i18n="allWorks">All works</option>
+            <option value="favorites" data-i18n="favorites">Favorites</option>
+            <option value="archived" data-i18n="archived">Archived</option>
+            <option value="trash" data-i18n="trash">Trash</option>
+          </select>
         </div>
-
-        <div class="history">
-          <h2>Recent jobs</h2>
-          <p class="hint tight">
-            选择一条已完成的任务，可自动填入 Continue / Edit / Extend 所需的源信息。
+        <div id="libraryGrid" class="library-grid"></div>
+        <button id="moreWorks" class="secondary" data-i18n="showMore" hidden>
+          Show more
+        </button>
+      </section>
+      <section id="tasksView" class="view" hidden>
+        <div class="page-heading">
+          <div>
+            <p class="eyebrow" data-i18n="creativeHistory">
+              YOUR CREATIVE HISTORY
+            </p>
+            <h1 data-i18n="tasks">Tasks</h1>
+            <p class="subtitle" data-i18n="tasksIntro">
+              Open any task to see its inputs, progress, result, and next steps.
+            </p>
+          </div>
+          <button id="refreshTasks" class="secondary" data-i18n="refresh">
+            Refresh
+          </button>
+        </div>
+        <div class="collection-toolbar">
+          <label class="search-field"
+            ><span aria-hidden="true">⌕</span
+            ><input
+              id="taskSearch"
+              type="search"
+              data-i18n-placeholder="search"
+              placeholder="Search titles, prompts, or collections" /></label
+          ><select id="taskFilter" aria-label="Task status">
+            <option value="all" data-i18n="allTasks">All tasks</option>
+            <option value="active" data-i18n="inProgress">In progress</option>
+            <option value="completed" data-i18n="completed">Completed</option>
+            <option value="failed" data-i18n="needsAttention">
+              Needs attention
+            </option>
+          </select>
+        </div>
+        <div id="taskList" class="task-list"></div>
+      </section>
+      <section id="referenceView" class="view" hidden>
+        <div class="page-heading">
+          <div>
+            <p class="eyebrow">GEMINI OMNI FLASH</p>
+            <h1 data-i18n="reference">API guide</h1>
+            <p class="subtitle" data-i18n="referenceIntro">
+              Understand each capability, then try it in the studio.
+            </p>
+          </div>
+          <span class="subtle">2026-11-13</span>
+        </div>
+        <div id="referenceGrid" class="reference-grid"></div>
+        <div class="surface reference-foot">
+          <h2 data-i18n="limitsTitle">Limits by model</h2>
+          <div class="table-scroll">
+            <table id="limits" class="limits"></table>
+          </div>
+        </div>
+        <div class="surface reference-foot">
+          <h2 data-i18n="contracts">API contracts & resources</h2>
+          <p data-i18n="contractsHelp">
+            Multi-turn edits use previous_interaction_id without
+            video_config.task. Extend and upscale send the source video with
+            their task. Audio is generated from the prompt; audio uploads and
+            dialogue edits are not supported.
           </p>
-          <ul id="jobList"></ul>
+          <a
+            href="https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/omni-1-2-flash"
+            target="_blank"
+            rel="noopener"
+            >gemini-omni-1.2-flash · Model card ↗</a
+          ><a
+            href="https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/omni-1-1-flash"
+            target="_blank"
+            rel="noopener"
+            >gemini-omni-1.1-flash-preview · Model card ↗</a
+          ><a
+            href="https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/video/overview"
+            target="_blank"
+            rel="noopener"
+            data-i18n="videoOverview"
+            >Video generation overview ↗</a
+          ><a
+            href="https://docs.cloud.google.com/gemini-enterprise-agent-platform/reference/models/interactions-api"
+            target="_blank"
+            rel="noopener"
+            >Interactions API ↗</a
+          ><a
+            href="https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/quotas"
+            target="_blank"
+            rel="noopener"
+            >Quotas ↗</a
+          ><a
+            href="https://cloud.google.com/products/gemini-enterprise-agent-platform/pricing"
+            target="_blank"
+            rel="noopener"
+            >Pricing ↗</a
+          >
         </div>
       </section>
     </main>
-
-    <script src="/static/app.js?v=37"></script>
+    <section id="preview" class="surface preview" aria-label="Work preview">
+      <div class="section-head">
+        <div>
+          <p class="eyebrow" data-i18n="preview">PREVIEW</p>
+          <h2 id="previewTitle" data-i18n="previewTitle">
+            Your next great frame.
+          </h2>
+        </div>
+        <button
+          id="closeInspector"
+          class="icon-button"
+          data-i18n-title="close"
+          title="Close"
+          hidden
+        >
+          ×
+        </button>
+      </div>
+      <div id="stage" class="stage">
+        <video
+          id="player"
+          controls
+          playsinline
+          preload="metadata"
+          hidden
+        ></video>
+        <div id="stageEmpty" class="stage-empty">
+          <div class="frame-mark" aria-hidden="true">✦</div>
+          <h3 data-i18n="noPreview">A little direction. A new possibility.</h3>
+          <p data-i18n="noPreviewHelp">
+            Choose a capability, describe your idea, and generate your first
+            clip.
+          </p>
+        </div>
+        <div id="stageState" class="stage-state" hidden></div>
+      </div>
+      <p id="playbackError" class="form-error" hidden>
+        <span data-i18n="playbackError"
+          >The video could not load. Your work is preserved.</span
+        ><button
+          id="retryPlayback"
+          class="text-button"
+          data-i18n="retryPlayback"
+        >
+          Reload video
+        </button>
+      </p>
+      <div id="workDetails" hidden>
+        <div class="work-meta">
+          <span id="workStatus" class="status-pill"></span
+          ><span id="workSpecs" class="subtle"></span
+          ><button
+            id="favorite"
+            class="icon-button"
+            data-i18n-title="favorite"
+            title="Favorite"
+          >
+            ☆
+          </button>
+        </div>
+        <div id="nextActions" class="next-actions"></div>
+        <div class="work-tools">
+          <a id="downloadVideo" class="text-button" data-i18n="download"
+            >Download video</a
+          ><button id="manageWork" class="text-button" data-i18n="organize">
+            Organize</button
+          ><a id="exportJob" class="text-button" data-i18n="exportRecord"
+            >Export task record</a
+          >
+        </div>
+        <div
+          id="detailTabs"
+          class="detail-tabs"
+          role="group"
+          aria-label="Task details"
+        >
+          <button data-detail="overview" class="active" data-i18n="overview">
+            Overview</button
+          ><button data-detail="inputs" data-i18n="inputs">Inputs</button
+          ><button data-detail="versions" data-i18n="versions">Versions</button
+          ><button data-detail="technical" data-i18n="technical">
+            Details
+          </button>
+        </div>
+        <div id="detailContent" class="detail-content"></div>
+      </div>
+      <div id="recentStrip" class="recent-strip">
+        <div class="section-head">
+          <h3 data-i18n="recent">Recent work</h3>
+          <button id="allTasks" class="text-button" data-i18n="viewAll">
+            View all →
+          </button>
+        </div>
+        <div id="recentItems"></div>
+      </div>
+    </section>
+    <dialog id="inspector" class="inspector"></dialog>
+    <dialog id="settingsDialog" class="settings-dialog">
+      <form method="dialog">
+        <div class="section-head">
+          <h2 data-i18n="workspace">Workspace</h2>
+          <button class="icon-button" aria-label="Close">×</button>
+        </div>
+      </form>
+      <label
+        ><span data-i18n="language">Interface language</span
+        ><select id="language">
+          <option value="en">English</option>
+          <option value="ja">日本語</option>
+          <option value="zh">中文</option>
+        </select></label
+      >
+      <div class="workspace-info">
+        <span class="live-dot"></span><span id="workspaceInfo"></span>
+      </div>
+      <p class="subtle" data-i18n="workspaceHelp">
+        Your cloud history belongs to this browser workspace. Keep a recovery
+        file to open it on another device. Anyone with this file and access to
+        this demo can open your workspace.
+      </p>
+      <a
+        href="/api/workspace/export"
+        class="secondary"
+        data-i18n="exportWorkspace"
+        >Export recovery file</a
+      ><label class="file-button"
+        ><input
+          id="restoreWorkspace"
+          type="file"
+          accept="application/json"
+        /><span data-i18n="restoreWorkspace">Import recovery file</span></label
+      >
+      <p id="settingsStatus" role="status"></p>
+    </dialog>
+    <dialog id="manageDialog" class="settings-dialog">
+      <form id="manageForm">
+        <div class="section-head">
+          <h2 data-i18n="organize">Organize</h2>
+          <button
+            type="button"
+            id="closeManage"
+            class="icon-button"
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <label
+          ><span data-i18n="title">Title</span
+          ><input id="workTitle" maxlength="120" /></label
+        ><label
+          ><span data-i18n="collection">Collection</span
+          ><input
+            id="workCollection"
+            maxlength="80"
+            list="collectionNames" /><datalist
+            id="collectionNames"
+          ></datalist></label
+        ><label
+          ><span data-i18n="notes">Notes</span
+          ><textarea id="workNotes" maxlength="2000" rows="3"></textarea>
+        </label>
+        <div class="management-actions">
+          <button type="submit" class="primary" data-i18n="save">
+            Save changes</button
+          ><button
+            type="button"
+            id="archiveWork"
+            class="secondary"
+            data-i18n="archive"
+          >
+            Archive</button
+          ><button
+            type="button"
+            id="trashWork"
+            class="danger"
+            data-i18n="moveTrash"
+          >
+            Move to trash
+          </button>
+        </div>
+        <p class="subtle" data-i18n="trashHelp">
+          Trash is reversible. Videos and task records remain available for
+          restoration.
+        </p>
+        <p id="manageError" class="form-error" hidden></p>
+      </form>
+    </dialog>
+    <div id="toast" class="toast" role="status" hidden></div>
+    <script src="/static/i18n.js?v=45"></script>
+    <script src="/static/app.js?v=45"></script>
   </body>
 </html>

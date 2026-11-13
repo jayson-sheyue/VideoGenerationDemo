@@ -4,7 +4,7 @@
 
 基于 **Gemini Omni Flash** 的本地 / Cloud Run 视频实验台。默认模型是正式版 **Omni 1.2 Flash**（`gemini-omni-1.2-flash`），页面里仍可切回 **1.1 Flash Preview**（`gemini-omni-1.1-flash-preview`），也可以手填其他模型 ID。网页里写分镜、挂参考图或参考视频，调用 Google Cloud **Agent Platform Interactions API** 完成生成、多轮编辑、续写和放大。
 
-模型能力、参数限制、提示词写法见 [learning_guide.md](./learning_guide.md)。官方链接的汇总和跳转在运行中的 `/docs` 页。本文只讲 **这个仓库怎么跑、怎么部署、接口怎么用**。
+模型能力、参数限制、提示词写法见 [learning_guide.md](./learning_guide.md)。页面里的 **API 能力指南**（也可直接打开 `/docs`）列出每项能力、各模型的参数范围和官方页面。本文只讲 **这个仓库怎么跑、怎么部署、接口怎么用**。
 
 ## 能做什么
 
@@ -107,7 +107,14 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 - **Upscale**：仅 1.2，`task=upscale`，源片不超过 15 秒。请求不带文字，只把分辨率提高到比源片更高的一档。官方建议先用 360p / 720p 出草稿，再放大到 1080p 或 4K。这不是 Cloud Transcoder 的转码。
 - **Seed / Labels**：仅 1.2。Seed 写入 `generation_config.seed`；labels 用小写 `key=value`，用来给账单分组。
 
-Comparison 面板可以把同一条血缘链上的成片并排同步播放。任务状态存在进程内存里，重启服务或 Cloud Run 缩到 0 后历史会丢，**成片仍在 GCS**。
+## 创作台、作品集与任务历史
+
+- **创作台**：八项功能（文生、首帧、首尾帧、参考、编辑、多轮编辑、续写、放大）。每项只显示自己的参数，各自保存草稿，乱序切换也能直接测当前功能。刷新后草稿和正在看的作品都会回来。
+- **作品预览**：每条成片都能一键作为源片进入 多轮编辑 / 编辑 / 续写 / 放大，也能用「复用此任务设置」把当时的输入放回创作台。标签页里有输入素材、实际提交的提示词与请求、任务时间线，以及同一条血缘链上的衍生版本（可并排对比播放）。
+- **作品集**：成片可命名、分组、备注、收藏、归档，回收站可恢复；支持搜索和筛选。
+- **任务历史**：全部任务，可按状态筛选。打开任务是在对话框里预览，不动创作台的草稿。
+- **工作区**：历史归属于当前浏览器工作区（http-only cookie）。在「工作区 → 导出恢复文件」后，可以在另一台设备打开同一个工作区。任务记录和作品集信息存在 `OUTPUT_GCS_URI/workspaces/`（可用 `WORKSPACE_STORE_URI` 改位置）；没有配置 bucket 时写到本地 `outputs/workspaces/`。服务重启后，已经拿到 interaction id 的任务会继续轮询同一个 id，不会重复提交。
+- 界面语言：English / 日本語 / 中文（在工作区对话框里切换）。提示词按原文发送。
 
 ## 环境变量
 
@@ -125,6 +132,8 @@ Comparison 面板可以把同一条血缘链上的成片并排同步播放。任
 | `HTTP_PROXY` / `HTTPS_PROXY` | 仅本地；Cloud Run 会剥离 |
 | `GOOGLE_API_TRUST_ENV` | 本地走系统代理时设 `true` |
 | `OUTPUT_DIR` | 本地落盘目录；Cloud Run 默认 `/tmp` |
+| `WORKSPACE_STORE_URI` | 任务记录与作品集信息的位置。默认 `OUTPUT_GCS_URI/workspaces` |
+| `MAX_ACTIVE_JOBS` | 这个实例上同时进行的生成数上限，默认 8 |
 
 Omni 的 Interactions URL 固定为 `locations/global`，与部署区域无关。
 
@@ -132,12 +141,21 @@ Omni 的 Interactions URL 固定为 `locations/global`，与部署区域无关�
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| `GET` | `/docs` | 官方文档汇总和跳转 |
+| `GET` | `/docs` | API 能力指南（同一个页面的指南视图） |
+| `GET` / `POST` | `/api/workspace` | 打开当前浏览器工作区 / 用恢复密钥切换工作区 |
+| `GET` | `/api/workspace/export` | 下载工作区恢复文件 |
+| `POST` | `/api/assets` | 上传一张参考图或一段视频（≤ 20 MB），返回 `gs://` |
 | `GET` | `/api/health` | 项目、默认模型、1.1/1.2 能力表、GCS、代理、runtime |
 | `GET` | `/api/example` | 参考图模式的默认示例 |
 | `GET` | `/api/examples` | 各 generate task / edit / extend 的示例；提示词与示例图按真实画面配对 |
 | `POST` | `/api/generate` | 启动任务；`generate_task` 指定文生 / 首帧 / 首尾帧 / 参考 |
-| `GET` | `/api/jobs` | 最近任务 |
+| `GET` | `/api/submissions/{request_id}` | 按提交时的 `request_id` 查这次提交对应的任务（页面中断后用来确认是否已启动） |
+| `GET` | `/api/jobs` | 当前工作区的全部任务（列表用的精简字段） |
+| `PATCH` | `/api/jobs/{id}` | 改标题、分组、备注、收藏、归档、回收站（带 `version` 防止覆盖） |
+| `POST` | `/api/jobs/{id}/recover` | 按已保存的 interaction id 重新查询状态，不重新生成 |
+| `GET` | `/api/jobs/{id}/export` | 下载完整任务记录 |
+| `GET` | `/api/jobs/{id}/download` | 下载成片 |
+| `GET` | `/api/jobs/{id}/assets/{images\|videos}/{n}` | 这条任务用过的参考素材 |
 | `GET` | `/api/jobs/{id}` | 轮询状态；含 `editable`、`reuse_ready`、`duration_sec` |
 | `GET` | `/api/jobs/{id}/video` | 本机文件或 302 到签名 URL |
 | `GET` | `/api/jobs/{id}/lineage` | 同一条生成链上的成片 |
@@ -146,7 +164,7 @@ Omni 的 Interactions URL 固定为 `locations/global`，与部署区域无关�
 | `POST` | `/api/test-gcs-upload` | 只测浏览器 → GCS，不调 Omni |
 | `GET` | `/api/fetch-image?url=` | 服务端代下参考图 |
 
-`POST /api/generate` 常用字段：`prompt`、`model`、`generate_task`、`reference_images`、`reference_videos`（base64 或 `gs://`）、`image_urls`、`duration`（1.2 为 3–15，首尾帧和续写另有上限）、`resolution`、`aspect_ratio`、`mode`（含 `upscale`）、`seed`、`labels`、`stateful`、`source_job_id` / `source_video_uri`、`reuse_job_id`、`enhance_prompt`。
+`POST /api/generate` 常用字段：`prompt`、`model`、`generate_task`、`reference_images`、`reference_videos`（base64 或 `gs://`）、`image_urls`、`duration`（1.2 为 3–15，首尾帧和续写另有上限）、`resolution`、`aspect_ratio`、`mode`（含 `upscale`）、`seed`、`labels`、`stateful`、`source_job_id` / `source_video_uri`、`reuse_job_id`、`enhance_prompt`、`request_id`（同一个 `request_id` 重复提交只会得到同一条任务）。除 `/api/health`、`/api/workspace`、`/api/examples` 外，接口都需要先 `GET /api/workspace` 拿到工作区 cookie。
 
 超过该模型编辑上限的成片，接口仍可 **extend**；1.2 在 15 秒以内还可以 **upscale**。
 
@@ -170,12 +188,12 @@ PROJECT_ID=your-gcp-project BUCKET=your-gcs-bucket ./deploy/cloud-run.sh
 
 这些部署参数是有意的，不是默认值随便填：
 
-- `JobStore` 在 **进程内存** 里，生成在 HTTP 返回之后仍会跑很久 → `--no-cpu-throttling`、`--max-instances 1`
-- 空闲缩到 0（`--min-instances 0`）不产生待机费用；冷启动后内存历史清空，成片仍在 `OUTPUT_GCS_URI`
-- 生成期间请保持页面打开，轮询能把实例撑住
+- 生成在 HTTP 返回之后仍会跑很久，并且由发起它的实例轮询 → `--no-cpu-throttling`、`--max-instances 1`
+- 空闲缩到 0（`--min-instances 0`）不产生待机费用；任务记录和作品集信息在 GCS 里，冷启动后照常打开
+- 实例在生成中途重启时，已拿到 interaction id 的任务会在工作区再次打开时继续轮询
 - 默认 `--allow-unauthenticated`。大陆网络经常打不开 `*.run.app`，需要的话自己挂自定义域名 + 负载均衡
 
-多实例之前必须先把任务状态迁到 Redis / Firestore 之类的外部存储。
+多实例之前需要先把「哪个实例在轮询哪条任务」也放到外部协调（例如 Firestore / Redis 锁）。
 
 ## 仓库结构
 
@@ -183,12 +201,13 @@ PROJECT_ID=your-gcp-project BUCKET=your-gcs-bucket ./deploy/cloud-run.sh
 app/config.py            环境变量、Cloud Run 检测、代理
 app/omni_client.py       Interactions 请求、轮询、解析视频
 app/model_catalog.py     1.1 / 1.2 的时长、编辑、放大和参考上限
-app/jobs.py              异步任务、按模型校验时长、参考图/视频复用
+app/jobs.py              异步任务、按模型校验时长、参考图/视频复用、任务记录持久化
+app/workspace.py         工作区身份与记录存储（GCS 对象 + generation 校验，或本地 JSON）
 app/prompt_utils.py      解析 URL、@图片N / @视频N、台词锁
 app/prompt_enhancer.py   动作补丁、续写润色、建议气泡
 app/gcs_util.py          上传、签名 URL、时长探测
 app/main.py              FastAPI
-static/                  实验台，以及 /docs 官方文档页
+static/                  单页界面：创作台、作品集、任务历史、API 能力指南（app.js / i18n.js / style.css）
 tests/                   请求体、示例配对、失败信息等回归
 deploy/cloud-run.sh      一键部署
 learning_guide.md        Omni 能力与提示词

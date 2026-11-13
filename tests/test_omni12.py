@@ -485,8 +485,9 @@ class ApiTests(unittest.TestCase):
 
     def test_index_exposes_upscale_and_docs(self):
         html = self.client.get("/").text
-        self.assertIn('data-mode="upscale"', html)
-        self.assertIn('href="/docs"', html)
+        self.assertIn('id="capabilities"', html)
+        self.assertIn('id: "upscale"', self.client.get('/static/app.js').text)
+        self.assertIn('data-view="reference"', html)
         self.assertIn("gemini-omni-1.2-flash", html)
 
 

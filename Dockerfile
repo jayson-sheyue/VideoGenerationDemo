@@ -20,6 +20,6 @@ COPY static ./static
 ENV PORT=8080
 EXPOSE 8080
 
-# One worker only: JobStore keeps job state in process memory, so a second
-# worker would answer polls for jobs it never started.
+# One worker only: a running generation is polled by the process that started
+# it. Task records are durable (GCS), so history does not depend on this process.
 CMD exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT} --workers 1

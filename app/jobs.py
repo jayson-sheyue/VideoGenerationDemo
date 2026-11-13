@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 import asyncio
-import traceback
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any
 
 from app import omni_client, prompt_enhancer
+from app.workspace import workspace_id, ConflictError
 from app.config import OUTPUT_DIR, gcs_prefix_for_inputs, settings
 from app.model_catalog import ModelProfile, profile_for, upscale_targets
 from app.gcs_util import (
@@ -58,11 +58,17 @@ class JobStatus(str, Enum):
     saving = "saving"
     completed = "completed"
     failed = "failed"
+    interrupted = "interrupted"
 
 
 @dataclass
 class Job:
     id: str
+    owner: str = "local"
+    library: dict[str, Any] = field(default_factory=dict)
+    request: dict[str, Any] = field(default_factory=dict)
+    request_hash: str = ""
+    events: list[dict[str, str]] = field(default_factory=list)
     status: JobStatus = JobStatus.queued
     message: str = "Queued"
     created_at: str = field(
@@ -89,6 +95,9 @@ class Job:
         if message is not None:
             self.message = message
         self.updated_at = datetime.now(timezone.utc).isoformat()
+        if status is not None or message is not None:
+            self.events.append({"at": self.updated_at, "status": self.status.value, "message": self.message})
+            self.events = self.events[-100:]
 
     def to_dict(self) -> dict[str, Any]:
         video_url = None
@@ -101,6 +110,9 @@ class Job:
 
         return {
             "id": self.id,
+            "library": self.library,
+            "request": self.request,
+            "events": self.events,
             "status": self.status.value,
             "message": self.message,
             "created_at": self.created_at,
@@ -115,7 +127,8 @@ class Job:
             "source_job_id": self.source_job_id,
             "source_video_uri": self.source_video_uri,
             "duration_sec": self.duration_sec,
-            "model": self.meta.get("model"),
+            # A task that has only just been queued is described by its request.
+            "model": self.meta.get("model") or self.request.get("model"),
             "edit_max_sec": _edit_limit(self),
             "upscale_max_sec": _upscale_limit(self),
             "output_resolution": self.meta.get("output_resolution"),
@@ -125,35 +138,144 @@ class Job:
                 and self.duration_sec <= _edit_limit(self) + 0.05
             ),
             "upscalable": _job_upscalable(self),
-            "generate_task": self.meta.get("generate_task") or self.meta.get("task"),
+            "generate_task": self.meta.get("generate_task")
+            or self.meta.get("task")
+            or (self.request.get("generate_task") if self.request.get("mode") == "generate" else None),
             "reuse_ready": _reuse_ready(self),
             "shot_list": self.meta.get("shot_list"),
         }
 
 
 class JobStore:
-    def __init__(self) -> None:
+    def __init__(self, repository=None) -> None:
         self._jobs: dict[str, Job] = {}
         self._lock = asyncio.Lock()
+        self.repository = repository
+        self.loaded: set[str] = set()
+        self.running: dict[str, asyncio.Task] = {}
+        self.saved: dict[str, str] = {}
 
-    async def create(self) -> Job:
-        job = Job(id=uuid.uuid4().hex[:12])
+    async def load(self) -> None:
+        owner = workspace_id.get()
+        if not self.repository or owner in self.loaded:
+            return
         async with self._lock:
+            if owner in self.loaded:
+                return
+            records = await asyncio.to_thread(self.repository.list, f"{owner}/jobs/")
+            libraries = await asyncio.to_thread(self.repository.list, f"{owner}/library/")
+            by_id = {item["id"]: item for item in libraries}
+            for record in records:
+                record["status"] = JobStatus(record["status"])
+                record["library"] = by_id.get(record["id"], {})
+                job = Job(**record)
+                self._jobs[job.id] = job
+                # What was just read is already stored; only later changes are written.
+                self.saved[job.id] = self.fingerprint(job)
+            self.loaded.add(owner)
+        # Recovery never repeats create_interaction. Only poll a known ID.
+        for job in list(self._jobs.values()):
+            if job.owner == owner and job.status not in TERMINAL:
+                if job.interaction_id:
+                    self.track(job, resume_job(job))
+                else:
+                    job.touch(JobStatus.interrupted, "Execution was interrupted before an interaction ID was saved. Check before retrying; submission may have reached the API.")
+                    await self.save(job)
+
+    async def create(self, *, job_id=None, request_hash="", request=None) -> Job:
+        await self.load()
+        job = Job(id=job_id or uuid.uuid4().hex, owner=workspace_id.get(), request=request or {}, request_hash=request_hash)
+        async with self._lock:
+            if job.id in self._jobs:
+                existing = self._jobs[job.id]
+                if existing.owner != job.owner or existing.request_hash != request_hash:
+                    raise ConflictError("Request identifier already used with different inputs")
+                return existing
+            if sum(j.status not in TERMINAL for j in self._jobs.values()) >= settings.max_active_jobs:
+                from fastapi import HTTPException
+                raise HTTPException(429, "Generation capacity is busy. Wait for a running task to finish.")
+            if self.repository:
+                try:
+                    await asyncio.to_thread(self.repository.write, f"{job.owner}/jobs/{job.id}.json", self.record(job), "0")
+                except ConflictError:
+                    raw, _ = await asyncio.to_thread(self.repository.read, f"{job.owner}/jobs/{job.id}.json")
+                    raw["status"] = JobStatus(raw["status"])
+                    existing = Job(**raw)
+                    if existing.request_hash != request_hash:
+                        raise ConflictError("Request identifier already used with different inputs")
+                    self._jobs[job.id] = existing
+                    return existing
             self._jobs[job.id] = job
+            job._created_here = True
+            if self.repository:
+                self.saved[job.id] = self.fingerprint(job)
         return job
 
-    async def get(self, job_id: str) -> Job | None:
-        async with self._lock:
-            return self._jobs.get(job_id)
+    def fingerprint(self, job) -> str:
+        import json
+        return json.dumps(self.record(job), sort_keys=True)
 
-    async def list(self, limit: int = 20) -> list[Job]:
+    def record(self, job):
+        raw = asdict(job)
+        raw["status"] = job.status.value
+        raw["library"] = {}  # User edits live in a separately versioned record.
+        return raw
+
+    async def save(self, job):
+        if not self.repository:
+            return
         async with self._lock:
-            jobs = sorted(
-                self._jobs.values(),
-                key=lambda j: j.created_at,
-                reverse=True,
-            )
-            return jobs[:limit]
+            record = self.record(job)
+            fingerprint = self.fingerprint(job)
+            if self.saved.get(job.id) == fingerprint:
+                return
+            await asyncio.to_thread(self.repository.write, f"{job.owner}/jobs/{job.id}.json", record)
+            self.saved[job.id] = fingerprint
+
+    def track(self, job, coroutine):
+        async def run():
+            try:
+                await coroutine
+            finally:
+                try:
+                    await self.save(job)
+                finally:
+                    self.running.pop(job.id, None)
+        task = asyncio.create_task(run())
+        self.running[job.id] = task
+        return task
+
+    async def get(self, job_id: str) -> Job | None:
+        await self.load()
+        async with self._lock:
+            job = self._jobs.get(job_id)
+            return job if job and job.owner == workspace_id.get() else None
+
+    async def list(self, limit: int = 500) -> list[Job]:
+        await self.load()
+        async with self._lock:
+            return sorted((j for j in self._jobs.values() if j.owner == workspace_id.get()), key=lambda j: j.created_at, reverse=True)[:limit]
+
+    async def update_library(self, job, changes, expected):
+        async with self._lock:
+            key = f"{job.owner}/library/{job.id}.json"
+            if self.repository:
+                current, generation = await asyncio.to_thread(self.repository.read, key)
+            else:
+                current, generation = job.library, "0"
+            current = current or {}
+            version = int(current.get("version", 0))
+            if expected != version:
+                job.library = current
+                raise ConflictError("This work changed in another window. Refresh and try again.")
+            updated = {**current, **changes, "id": job.id, "version": version + 1}
+            if self.repository:
+                await asyncio.to_thread(self.repository.write, key, updated, generation)
+            job.library = updated
+        return job
+
+
+TERMINAL = {JobStatus.completed, JobStatus.failed, JobStatus.interrupted}
 
 
 job_store = JobStore()
@@ -257,6 +379,8 @@ def resolve_generate_kind(generate_task: str | None, image_count: int) -> tuple[
 
 async def _submit_and_finalize(job: Job, *, payload: dict[str, Any]) -> None:
     job.touch(JobStatus.submitting, "Submitting to Omni Interactions API…")
+    job.meta["request_payload"] = {**payload, "input": [{k: v for k, v in item.items() if k != "data"} for item in payload.get("input", [])]}
+    await job_store.save(job)
     created = await omni_client.create_interaction(payload)
     interaction_id = created.get("id")
     if not interaction_id:
@@ -278,23 +402,38 @@ async def _submit_and_finalize(job: Job, *, payload: dict[str, Any]) -> None:
         job.meta["task"] = job.meta.get("api_task")
         job.meta["task_omitted"] = bool(payload.get("previous_interaction_id"))
 
+    await job_store.save(job)
+    await _finalize_interaction(job, created)
+
+
+async def resume_job(job):
+    try:
+        job.touch(JobStatus.generating, "Restoring status from the original interaction…")
+        await _finalize_interaction(job, await omni_client.get_interaction(job.interaction_id))
+    except Exception as exc:
+        job.error = str(exc)
+        job.touch(JobStatus.interrupted, "Could not recover interaction status. Refresh status to retry without generating again.")
+
+
+async def _finalize_interaction(job, created):
     status = (created.get("status") or "").lower()
     if status == "completed":
         interaction = created
     else:
         job.touch(
             JobStatus.generating,
-            f"Generating… (interaction {interaction_id})",
+            f"Generating… (interaction {job.interaction_id})",
         )
-        interaction = await omni_client.poll_until_done(interaction_id)
+        interaction = await omni_client.poll_until_done(job.interaction_id)
 
-    if (interaction.get("status") or "").lower() == "failed":
+    if (interaction.get("status") or "").lower() in {"failed", "cancelled", "canceled"}:
         raise omni_client.OmniAPIError(
             omni_client.format_interaction_failure(interaction),
             body=interaction,
         )
 
     job.thoughts = omni_client.extract_thoughts(interaction) or None
+    job.meta["usage"] = interaction.get("usage")
     video_bytes, video_uri, _mime = omni_client.extract_video(interaction)
     job.video_uri = video_uri
 
@@ -306,11 +445,9 @@ async def _submit_and_finalize(job: Job, *, payload: dict[str, Any]) -> None:
 
     if use_gcs_playback:
         job.touch(JobStatus.saving, "Preparing signed playback URL…")
-        from app.gcs_util import sign_gcs_read_url
-
-        signed = await asyncio.to_thread(sign_gcs_read_url, video_uri)
         job.meta["playback"] = "gcs_signed"
-        job.meta["signed_url_preview"] = signed[:96] + "…"
+        # Playback signing is recoverable independently of paid generation.
+        # A transient signing failure must not turn a generated work into a failure.
         job.duration_sec = await asyncio.to_thread(probe_video_duration, video_uri)
         job.touch(JobStatus.completed, _done_message(job))
         return
@@ -549,6 +686,10 @@ async def run_generation_job(
             "resolution": resolution,
             "aspect_ratio": aspect_ratio,
             "generate_audio": generate_audio,
+            "no_subtitles": no_subtitles,
+            "no_bgm": no_bgm,
+            "enhance_prompt": enhance_prompt,
+            "prompt_original": prompt,
             "model": model_id,
             "profile_assumed": assumed,
             "stateful": bool(state),
@@ -569,6 +710,8 @@ async def run_generation_job(
                 else None
             )
             source_job = await job_store.get(source_job_id) if source_job_id else None
+            if source_job and source_video_uri and source_video_uri != source_job.video_uri:
+                source_job = None
             if api_task == "extend" and source_job:
                 inherited = source_job.meta.get("output_resolution")
                 if inherited:
@@ -700,7 +843,7 @@ async def run_generation_job(
             job.meta["source_video_uri"] = source_video_uri
             job.meta["api_task"] = api_task
             job.meta["previous_interaction_id"] = chain_id
-            job.meta["final_prompt_preview"] = edit_prompt[:4000]
+            job.meta["final_prompt_preview"] = edit_prompt
             if api_task == "upscale":
                 job.meta["upscale_note"] = (
                     "No text was sent. Upscale takes the source video and a higher resolution only."
@@ -776,27 +919,9 @@ async def run_generation_job(
                 f"Staging {len(client_images)} browser image(s) "
                 f"({'local→GCS' if use_gcs else 'base64'})…",
             )
-            if use_gcs:
-                staged = await asyncio.to_thread(
-                    stage_images_to_gcs,
-                    job_id=job.id,
-                    items=client_images,
-                )
-                for item in staged:
-                    images.append(
-                        {"mime_type": item["mime_type"], "uri": item["uri"]}
-                    )
-                job.meta["image_delivery"] = "browser_local_gcs"
-                job.meta["local_refs"] = [s["local_path"] for s in staged]
-                _persist_gcs_refs(job, images)
-            else:
-                for item in client_images:
-                    mime = item.get("mime_type") or "image/png"
-                    data_b64 = item["data"]
-                    if "," in data_b64 and data_b64.strip().startswith("data:"):
-                        data_b64 = data_b64.split(",", 1)[1]
-                    images.append({"mime_type": mime, "data": data_b64})
-                job.meta["image_delivery"] = "browser_base64"
+            images = await _stage_uploads(job, client_images, kind="image", stem="ref")
+            job.meta["image_delivery"] = "gcs" if use_gcs else "base64"
+            _persist_gcs_refs(job, images)
         elif resolved_urls:
             job.touch(
                 JobStatus.downloading,
@@ -959,7 +1084,7 @@ async def run_generation_job(
                 p for p in (control, lock, speech, rewritten, mot["prompt"]) if p
             )
 
-        job.meta["final_prompt_preview"] = final_prompt[:4000]
+        job.meta["final_prompt_preview"] = final_prompt
 
         payload = omni_client.build_payload(
             prompt=final_prompt,
@@ -976,5 +1101,9 @@ async def run_generation_job(
         )
         await _submit_and_finalize(job, payload=payload)
     except Exception as exc:
-        job.error = f"{exc}\n{traceback.format_exc()}"
-        job.touch(JobStatus.failed, str(exc))
+        job.error = str(exc)
+        job.meta["error_kind"] = "api" if isinstance(exc, omni_client.OmniAPIError) else "application"
+        unknown = bool(job.interaction_id) and not (isinstance(exc, omni_client.OmniAPIError) and isinstance(exc.body, dict) and exc.body.get("status") in {"failed", "canceled", "cancelled"})
+        job.touch(JobStatus.interrupted if unknown else JobStatus.failed, str(exc))
+    finally:
+        await job_store.save(job)

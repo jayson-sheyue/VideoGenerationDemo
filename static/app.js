@@ -1,1904 +1,1904 @@
-const promptEl = document.getElementById("prompt");
-const imageListEl = document.getElementById("imageList");
-const generateBtn = document.getElementById("generateBtn");
-const testGcsBtn = document.getElementById("testGcsBtn");
-const statusLine = document.getElementById("statusLine");
-const jobIdEl = document.getElementById("jobId");
-const jobLog = document.getElementById("jobLog");
-const thoughtsBlock = document.getElementById("thoughtsBlock");
-const thoughtsEl = document.getElementById("thoughts");
-const player = document.getElementById("player");
-const stageEmpty = document.getElementById("stageEmpty");
-const jobListEl = document.getElementById("jobList");
-const healthEl = document.getElementById("health");
-const brandSubEl = document.getElementById("brandSub");
-const stageEmptyCopyEl = document.getElementById("stageEmptyCopy");
-const advancedHintEl = document.getElementById("advancedHint");
-const guideTitle = document.getElementById("guideTitle");
-const guideTask = document.getElementById("guideTask");
-const guideSteps = document.getElementById("guideSteps");
-const guideNote = document.getElementById("guideNote");
-const exampleChips = document.getElementById("exampleChips");
-const exampleRow = document.getElementById("exampleRow");
-const promptField = document.getElementById("promptField");
-const genTabs = document.getElementById("genTabs");
-const sourceBox = document.getElementById("sourceBox");
-const refsSection = document.getElementById("refsSection");
-const refsTitle = document.getElementById("refsTitle");
-const refsHint = document.getElementById("refsHint");
-const addImageBtn = document.getElementById("addImage");
-const uploadImagesBtn = document.getElementById("uploadImages");
-const filePicker = document.getElementById("filePicker");
-const sourceVideoField = document.getElementById("sourceVideoField");
-const sourceJobIdEl = document.getElementById("sourceJobId");
-const sourceVideoUriEl = document.getElementById("sourceVideoUri");
-const durationField = document.getElementById("durationField");
-const resolutionField = document.getElementById("resolutionField");
-const aspectField = document.getElementById("aspectField");
-const promptLabel = document.getElementById("promptLabel");
-const resultActions = document.getElementById("resultActions");
-const audioToggles = document.getElementById("audioToggles");
-const enhanceToggle = document.getElementById("enhanceToggle");
-const enhancePromptEl = document.getElementById("enhancePrompt");
-const enhanceHint = document.getElementById("enhanceHint");
-const promptBlock = document.getElementById("promptBlock");
-const promptSent = document.getElementById("promptSent");
-const promptDiffNote = document.getElementById("promptDiffNote");
-const suggestions = document.getElementById("suggestions");
-const suggestionBubbles = document.getElementById("suggestionBubbles");
-const suggestionsTitle = document.getElementById("suggestionsTitle");
-const comparison = document.getElementById("comparison");
-const comparisonGrid = document.getElementById("comparisonGrid");
-const comparisonHint = document.getElementById("comparisonHint");
-const modelSelect = document.getElementById("modelSelect");
-const customModelField = document.getElementById("customModelField");
-const customModelEl = document.getElementById("customModel");
-const modelNote = document.getElementById("modelNote");
-const seedEl = document.getElementById("seed");
-const labelsEl = document.getElementById("labels");
-const statefulEl = document.getElementById("stateful");
-const statefulField = document.getElementById("statefulField");
-const seedField = document.getElementById("seedField");
-const labelsField = document.getElementById("labelsField");
-const videoRefs = document.getElementById("videoRefs");
-const videoListEl = document.getElementById("videoList");
-const videoPicker = document.getElementById("videoPicker");
-const durationEl = document.getElementById("duration");
-const durationNameEl = document.getElementById("durationName");
-const resolutionNameEl = document.getElementById("resolutionName");
-const mediaControls = document.getElementById("mediaControls");
-const advancedEl = document.getElementById("advanced");
-const advancedSummaryEl = document.getElementById("advancedSummary");
-const audioInputNote = document.getElementById("audioInputNote");
-
-let catalog = [];
-const videoPayloads = new WeakMap();
-const FALLBACK_12 = {
-  id: "gemini-omni-1.2-flash",
-  generate_min: 3,
-  generate_max: 15,
-  frames_max: 10,
-  edit_max: 15,
-  extend_min: 3,
-  extend_max: 10,
-  extend_input_max: null,
-  upscale_max: 15,
-  reference_videos_max: 3,
-  edit_reference_images_max: 2,
-  supports_seed: true,
-  supports_labels: true,
-  supports_multiturn: true,
-  supports_upscale: true,
-};
-
-function selectedModelId() {
-  if (modelSelect.value === "custom") return customModelEl.value.trim() || FALLBACK_12.id;
-  return modelSelect.value;
-}
-
-function activeProfile() {
-  const id = selectedModelId();
-  const known = catalog.find((item) => item.id === id);
-  if (known) return known;
-  if (id.includes("1.1")) {
-    return {
-      ...FALLBACK_12,
-      id,
-      generate_max: 10,
-      edit_max: 10,
-      upscale_max: null,
-      supports_upscale: false,
-      supports_seed: false,
-      supports_labels: false,
-      supports_multiturn: false,
-      edit_reference_images_max: 0,
-      extend_input_max: 30,
-    };
-  }
-  return { ...FALLBACK_12, id };
-}
-
-function fillDuration(min, max, preferred) {
-  const current = Number(durationEl.value || preferred || 8);
-  durationEl.innerHTML = "";
-  for (let n = min; n <= max; n += 1) {
-    const opt = document.createElement("option");
-    opt.value = String(n);
-    opt.textContent = `${n}s`;
-    durationEl.appendChild(opt);
-  }
-  const next = current >= min && current <= max ? current : preferred;
-  durationEl.value = String(next);
-}
-
-function applyDurationForMode() {
-  const profile = activeProfile();
-  if (currentMode === "extend") {
-    fillDuration(profile.extend_min, profile.extend_max, 8);
-  } else if (currentMode === "generate" && currentGenTask === "frames_to_video") {
-    fillDuration(profile.generate_min, Math.min(profile.generate_max, profile.frames_max), 8);
-  } else {
-    fillDuration(profile.generate_min, profile.generate_max, 8);
-  }
-}
-
-let healthState = { ok: false, proxy: "", offline: false };
-
-function profileHeadline(profile) {
-  const name = profile.id.includes("1.1")
-    ? "1.1 Preview"
-    : profile.id.includes("1.2")
-      ? "1.2 Flash"
-      : profile.id;
-  const extendIn =
-    profile.extend_input_max == null
-      ? "extend any-length in"
-      : `extend input ≤${profile.extend_input_max}s`;
-  const upscale = profile.supports_upscale ? " · upscale" : "";
-  return `${name} · gen/edit ${profile.generate_min}–${profile.generate_max}s · ${extendIn} → ~40s out${upscale}`;
-}
-
-function modelNoteText(profile) {
-  const extend =
-    profile.extend_input_max == null
-      ? "续写源片可为任意长度"
-      : `续写源片要求 ≤ ${profile.extend_input_max} 秒`;
-  const refs = profile.edit_reference_images_max
-    ? `编辑可附最多 ${profile.edit_reference_images_max} 张参考图。`
-    : "编辑不接受参考图。";
-  const extras = [
-    profile.supports_multiturn ? "可多轮编辑" : "每次编辑重传 gs://",
-    profile.supports_upscale ? "可单独放大" : "无单独放大",
-    profile.supports_seed ? "可发送 seed / labels" : "不发送 seed / labels",
-  ].join("，");
-  return (
-    `${profile.label || profile.id}：生成 ${profile.generate_min}–${profile.generate_max} 秒` +
-    `（首尾帧最长 ${profile.frames_max}），编辑最长 ${profile.edit_max} 秒。` +
-    `${extend}，单次只加 ${profile.extend_min}–${profile.extend_max} 秒，成片约 ≤ 40 秒。${refs}${extras}。`
-  );
-}
-
-function paintHealth() {
-  if (!healthEl) return;
-  if (healthState.offline) {
-    healthEl.textContent = "Server offline";
-    healthEl.className = "health bad";
-    return;
-  }
-  if (!healthState.ok) {
-    healthEl.textContent = "Set GOOGLE_CLOUD_PROJECT in .env";
-    healthEl.className = "health bad";
-    return;
-  }
-  healthEl.textContent = `GCP ready · ${selectedModelId()}${healthState.proxy}`;
-  healthEl.className = "health ok";
-}
-
-function applyCapabilityChrome() {
-  const profile = activeProfile();
-  customModelField.hidden = modelSelect.value !== "custom";
-  const upscaleBtn = document.querySelector('#modeTabs [data-mode="upscale"]');
-  if (upscaleBtn) {
-    upscaleBtn.disabled = !profile.supports_upscale;
-    upscaleBtn.title = profile.supports_upscale ? "" : "当前模型没有单独放大";
-  }
-  modelNote.textContent = modelNoteText(profile);
-  if (brandSubEl) brandSubEl.textContent = profileHeadline(profile);
-  if (stageEmptyCopyEl) {
-    stageEmptyCopyEl.textContent = profile.supports_upscale
-      ? "先选模型，再选文生 / 首帧 / 首尾帧 / 参考。成片之后可以继续编辑、续写，或把 360p / 720p 草稿放大。"
-      : "先选模型，再选文生 / 首帧 / 首尾帧 / 参考。成片之后可以继续编辑或续写。当前模型没有单独放大。";
-  }
-  paintHealth();
-  syncVisibleFields();
-}
-
-function syncVisibleFields() {
-  const profile = activeProfile();
-  const mode = currentMode;
-  const isGenerate = mode === "generate";
-  const guide = isGenerate ? GEN_GUIDE[currentGenTask] : null;
-  const showDuration = isGenerate || mode === "extend";
-  const showResolution = mode !== "extend";
-  const showAspect = isGenerate;
-  const showPrompt = mode !== "upscale";
-  const showSource = !isGenerate;
-  const showEnhance = isGenerate || mode === "extend";
-  const showAudio = isGenerate && enhancePromptEl.checked;
-  const showImages = isGenerate
-    ? guide.slots !== 0
-    : mode !== "upscale" && profile.edit_reference_images_max > 0;
-  const showVideos =
-    isGenerate &&
-    currentGenTask === "reference_to_video" &&
-    profile.reference_videos_max > 0;
-  const showSeed = !!profile.supports_seed;
-  const showLabels = !!profile.supports_labels;
-  const showStateful =
-    !!profile.supports_multiturn && (mode === "continue" || mode === "edit");
-
-  durationField.hidden = !showDuration;
-  resolutionField.hidden = !showResolution;
-  aspectField.hidden = !showAspect;
-  if (mediaControls) mediaControls.hidden = !(showDuration || showResolution || showAspect);
-  if (promptField) promptField.hidden = !showPrompt;
-  sourceBox.hidden = !showSource;
-  sourceVideoField.hidden = !showSource;
-  enhanceToggle.hidden = !showEnhance;
-  audioToggles.hidden = !showAudio;
-  if (audioInputNote) {
-    audioInputNote.hidden = !isGenerate;
-    audioInputNote.textContent = showAudio
-      ? "这三项会写进润色后的提示词，不是单独的接口字段。音频文件不能作为输入。"
-      : "音频文件不能作为输入。对白、音效和音乐写在提示词里，由成片一起生成。";
-  }
-  genTabs.hidden = !isGenerate;
-  videoRefs.hidden = !showVideos;
-  refsSection.hidden = !showImages;
-  testGcsBtn.hidden = !(isGenerate && showImages);
-  addImageBtn.hidden = !(showImages && (!isGenerate || guide.slots === "n"));
-  uploadImagesBtn.hidden = !showImages;
-  if (showImages && isGenerate) {
-    refsTitle.textContent = guide.refsTitle;
-    refsHint.textContent = guide.refsHint;
-    filePicker.multiple = guide.slots === "n" || guide.slots === 2;
-  } else if (showImages) {
-    refsTitle.textContent = mode === "extend" ? "续写参考图" : "编辑参考图";
-    refsHint.textContent = `最多 ${profile.edit_reference_images_max} 张，可选。只有指令里写了 @图片1 才会随这次请求上传。`;
-    filePicker.multiple = true;
-    if (!imageListEl.children.length) addImageRow({ label: "@图片1" });
-  }
-
-  seedField.hidden = !showSeed;
-  labelsField.hidden = !showLabels;
-  statefulField.hidden = !showStateful;
-  if (advancedEl) advancedEl.hidden = !(showSeed || showLabels || showStateful);
-  if (advancedSummaryEl) {
-    const bits = [];
-    if (showSeed) bits.push("Seed");
-    if (showLabels) bits.push("计费标签");
-    if (showStateful) bits.push("多轮编辑");
-    advancedSummaryEl.textContent = bits.join("、");
-  }
-  if (advancedHintEl && (showSeed || showLabels || showStateful)) {
-    const lines = [];
-    if (showSeed || showLabels) lines.push("Seed 与 labels 只随当前这次请求发送。");
-    if (showStateful) lines.push("多轮编辑沿用上一条 interaction，大约保留 7 天。");
-    advancedHintEl.textContent = lines.join("");
-  }
-  if (durationNameEl) durationNameEl.textContent = mode === "extend" ? "本次追加" : "成片时长";
-  if (resolutionNameEl) {
-    resolutionNameEl.textContent =
-      mode === "upscale" ? "目标分辨率" : mode === "continue" || mode === "edit" ? "输出分辨率" : "分辨率";
-  }
-}
-
-function editGuideNote(profile) {
-  const chain = profile.supports_multiturn
-    ? "可勾选多轮编辑，不必重传成片。"
-    : "每次编辑重传 gs://。";
-  const refs = profile.edit_reference_images_max
-    ? `可附最多 ${profile.edit_reference_images_max} 张参考图。`
-    : "不接受参考图。";
-  return `不能改配音或台词。当前模型最长编辑 ${profile.edit_max} 秒。${chain}${refs}`;
-}
-
-function extendInputSummary(profile) {
-  if (profile.extend_input_max == null) {
-    return (
-      "源片可为任意长度。模型只看最后约 10 秒来决定下一段，成片保留源片最后约 30 秒，再接上 " +
-      `${profile.extend_min}–${profile.extend_max} 秒，总长约 ≤ 40 秒。更早的画面不会留在成片里。` +
-      "Duration 是本次追加的秒数。"
-    );
-  }
-  return (
-    `源片须 ≤ ${profile.extend_input_max} 秒。` +
-    `单次新增 ${profile.extend_min}–${profile.extend_max} 秒；成片约 ≤ 40 秒（末约 30 秒源片 + 新段）。`
-  );
-}
-
-function parseLabels(text) {
-  const labels = {};
-  for (const part of text.split(",")) {
-    const piece = part.trim();
-    if (!piece) continue;
-    const eq = piece.indexOf("=");
-    if (eq <= 0) throw new Error("Labels 写成 key=value，多个用逗号隔开");
-    labels[piece.slice(0, eq).trim()] = piece.slice(eq + 1).trim();
-  }
-  return labels;
-}
-
-function requestExtras() {
-  const profile = activeProfile();
-  const body = { model: selectedModelId(), stateful: false };
-  if (profile.supports_seed && seedEl.value !== "") body.seed = Number(seedEl.value);
-  if (profile.supports_labels && labelsEl.value.trim()) body.labels = parseLabels(labelsEl.value);
-  if (
-    profile.supports_multiturn &&
-    (currentMode === "continue" || currentMode === "edit")
-  ) {
-    body.stateful = statefulEl.checked;
-  }
-  return body;
-}
-
-const ALL_RESOLUTIONS = ["360p", "720p", "1080p", "4k"];
-const UPSCALE_FROM = {
+"use strict";
+const $ = (id) => document.getElementById(id);
+const docBase =
+  "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/video/";
+const capabilities = [
+  {
+    id: "text_to_video",
+    label: "text",
+    symbol: "T",
+    help: "textHelp",
+    doc: "generate-videos-from-text",
+    mode: "generate",
+    images: 0,
+  },
+  {
+    id: "image_to_video",
+    label: "first",
+    symbol: "▧",
+    help: "firstHelp",
+    doc: "generate-videos-from-an-image",
+    mode: "generate",
+    images: 1,
+  },
+  {
+    id: "frames_to_video",
+    label: "frames",
+    symbol: "▧ ▧",
+    help: "framesHelp",
+    doc: "generate-videos-from-first-and-last-frames",
+    mode: "generate",
+    images: 2,
+  },
+  {
+    id: "reference_to_video",
+    label: "refs",
+    symbol: "◈",
+    help: "refsHelp",
+    doc: "generate-videos-from-references",
+    mode: "generate",
+    images: 10,
+  },
+  {
+    id: "edit",
+    label: "edit",
+    symbol: "✎",
+    help: "editHelp",
+    doc: "edit-videos",
+    mode: "edit",
+    images: 2,
+  },
+  {
+    id: "continue",
+    label: "continue",
+    symbol: "↻",
+    help: "continueHelp",
+    doc: "edit-videos",
+    mode: "continue",
+    images: 2,
+  },
+  {
+    id: "extend",
+    label: "extend",
+    symbol: "↔",
+    help: "extendHelp",
+    doc: "extend-videos",
+    mode: "extend",
+    images: 2,
+  },
+  {
+    id: "upscale",
+    label: "upscale",
+    symbol: "⤢",
+    help: "upscaleHelp",
+    doc: "upscale-videos",
+    mode: "upscale",
+    images: 0,
+  },
+];
+const terminal = new Set(["completed", "failed", "interrupted"]);
+const upscaleTargets = {
   "360p": ["720p", "1080p"],
   "720p": ["1080p", "4k"],
   "1080p": [],
   "4k": [],
 };
-
-function setResolutionOptions(values, preferred) {
-  const select = document.getElementById("resolution");
-  const current = preferred || select.value;
-  select.innerHTML = "";
-  for (const value of values) {
-    const opt = document.createElement("option");
-    opt.value = value;
-    opt.textContent = value;
-    select.appendChild(opt);
-  }
-  if (!values.length) {
-    select.disabled = true;
-    return;
-  }
-  select.disabled = false;
-  select.value = values.includes(current) ? current : values[0];
+let view =
+    location.pathname === "/docs"
+      ? "reference"
+      : ["#library", "#tasks"].includes(location.hash)
+        ? location.hash.slice(1)
+        : "studio",
+  capId = "text_to_video",
+  drafts = {},
+  jobs = new Map(),
+  selectedId = null,
+  selectedJob = null,
+  selectionEpoch = 0,
+  detailTab = "overview",
+  workspace = null,
+  catalog = [],
+  examples = null,
+  submitting = false,
+  listBusy = false,
+  listSignature = "",
+  showLimit = 24,
+  toastTimer = null,
+  booted = false;
+let lastAttempt = null,
+  comparisonEpoch = 0,
+  collectionSignature = "";
+const preview = $("preview");
+$("previewHost").append(preview);
+function node(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text != null) n.textContent = text;
+  return n;
 }
-
-function sourceOutputResolution(job) {
-  if (!job) return "";
-  return job.output_resolution || (job.meta && job.meta.output_resolution) || "";
+function button(text, fn, cls = "secondary") {
+  const n = node("button", cls, text);
+  n.type = "button";
+  n.addEventListener("click", fn);
+  return n;
 }
-
-function applyUpscaleResolutionChoices() {
-  const source = sourceOutputResolution(selectedJob);
-  const allowed = Object.prototype.hasOwnProperty.call(UPSCALE_FROM, source)
-    ? UPSCALE_FROM[source]
-    : ["720p", "1080p", "4k"];
-  setResolutionOptions(allowed);
-  if (!allowed.length && source) {
-    setStatus(`${source} 没有可放大的目标。官方不支持 1080p → 4k。`);
-  }
+function fmtTime(value) {
+  if (!value) return "—";
+  return new Date(value).toLocaleString(
+    { en: "en-US", ja: "ja-JP", zh: "zh-CN" }[language],
+    { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" },
+  );
 }
-
-let pollTimer = null;
-let parseTimer = null;
-let lastFilledUrlsKey = "";
-let currentMode = "generate";
-let currentGenTask = "text_to_video";
-let serverExamples = null;
-
-function generateExamples(kind) {
-  return (serverExamples && serverExamples.generate && serverExamples.generate[kind]) || [];
+function titleOf(job) {
+  return (
+    job.library?.title ||
+    (
+      job.request?.prompt ||
+      job.shot_list ||
+      job.meta?.prompt_original ||
+      t(kindOf(job))
+    )
+      .split("\n")[0]
+      .slice(0, 90) ||
+    job.id
+  );
 }
-
-function modeExamples(mode) {
-  const list = serverExamples && serverExamples[mode];
-  return Array.isArray(list) ? list : [];
+function kindOf(job) {
+  return (
+    capabilities.find(
+      (c) =>
+        c.id === (job.generate_task || job.meta?.generate_task || job.mode),
+    )?.label ||
+    job.mode ||
+    "text"
+  );
 }
-
-async function ensureExamples() {
-  if (serverExamples) return serverExamples;
-  const res = await fetch("/api/examples");
-  if (!res.ok) throw new Error("示例列表加载失败");
-  serverExamples = await res.json();
-  renderExampleChips();
-  return serverExamples;
+function currentCap() {
+  return capabilities.find((c) => c.id === capId);
 }
-let selectedJob = null;
-const rowPayloads = new WeakMap();
-
-const GEN_GUIDE = {
-  text_to_video: {
-    title: "Text → video — 只靠文字生成",
-    task: "task=text_to_video",
-    steps: [
-      "不需要图片。写清主体、动作、镜头（景别/焦距/运镜）、光线和风格。",
-      "对白写在引号里；没有台词就写明 No dialogue。",
-      "点下方示例可直接填入提示词，再按 Generate。",
-    ],
-    note: "适合没有角色一致性要求的镜头。要锁人物外观请改用 References。",
-    placeholder: "例：A red paper lantern lifts off a wooden table at dusk. Slow tilt up, 24mm.",
-    promptLabel: "Prompt（纯文本分镜）",
-    button: "Generate from text",
-    refsTitle: "",
-    refsHint: "",
-    enhance:
-      "无参考图：允许把分镜写得更有镜头感。不会引入新角色或新剧情。",
-    slots: 0,
-  },
-  image_to_video: {
-    title: "First frame — 静帧当作第一帧",
-    task: "task=image_to_video",
-    steps: [
-      "上传一张本地图，或粘贴公网 URL。这张图是成片的第 0 帧，不是「长得像」的参考。",
-      "提示词只写从这一帧开始怎么动：推镜、刮风、光线变化。不要重写人物长相。",
-      "点示例会填入一张公开静帧，可随时换成自己的图。",
-    ],
-    note: "图即首帧。若只要「长得像这张图」而不当第一帧，请用 References。",
-    placeholder: "Use this image as the first frame. The camera slowly pushes in…",
-    promptLabel: "Prompt（从首帧开始的动作）",
-    button: "Generate from first frame",
-    refsTitle: "First frame",
-    refsHint: "一张图：本地上传或 URL。它会成为视频的第一帧。",
-    enhance: "不改静帧外观，只补「必须发生的动作 / 运镜」。",
-    slots: 1,
-    slotLabels: ["首帧"],
-  },
-  frames_to_video: {
-    title: "First + last — 两帧之间插值",
-    task: "task=image_to_video（两张图）",
-    steps: [
-      "准备两张图：第一张是开场，第二张是收束。顺序不能反。",
-      "提示词描述两帧之间的运镜（dolly、orbit、pan），而不是新的剧情。",
-      "适合环绕、推拉、近似循环的镜头。",
-    ],
-    note: "API 仍是 image_to_video。第一张=first frame，第二张=last frame。",
-    placeholder: "Start on the first image and end on the second. Slow dolly between them…",
-    promptLabel: "Prompt（两帧之间怎么走）",
-    button: "Generate between frames",
-    refsTitle: "First & last frames",
-    refsHint: "必须两张。可本地上传或 URL。上面是首帧，下面是尾帧。",
-    enhance: "不改两帧外观，只强调中间必须看到的运动。",
-    slots: 2,
-    slotLabels: ["首帧", "尾帧"],
-  },
-  reference_to_video: {
-    title: "References — 参考图锁定人物与画风",
-    task: "task=reference_to_video",
-    steps: [
-      "上传或粘贴 1 张及以上参考图。它们不是第一帧，只锁定长相、服装、场景、画风。",
-      "分镜里用 @图片1、@图片2 绑定角色。不要再用文字重写五官。",
-      "提示词里若带 参考图：[\"https://…\"] 会自动填入列表。",
-    ],
-    note: "服务端会把 @图片N / @视频N 改成 <IMAGE_REF_N> / <VIDEO_REF_N>。参考视频不当源片剪辑，其中的声音会被忽略。",
-    placeholder: "粘贴分镜；用 @图片1 绑定角色。也可在下方上传本地图。",
-    promptLabel: "Prompt（分镜 + @图片N）",
-    button: "Generate from references",
-    refsTitle: "Reference images",
-    refsHint: "本地上传或公网 URL。图是参考，不是字面第一帧。",
-    enhance: "分镜原文不改，只追加动作/运镜，避免把人物画风写崩。",
-    slots: "n",
-  },
-};
-
-const MODE_GUIDE = {
-  continue: {
-    title: "Continue edit — 基于上一条结果再改一刀",
-    task: "task=edit",
-    steps: [
-      "在右侧选一条已完成成片，或点「以此结果继续编辑」。",
-      "指令要短：改光、去掉一个物体、换一件衣服。一次只改一件事。",
-      "可选「自动润色」才会补 Keep everything else；默认原样提交。",
-    ],
-    note: "源片长度不能超过当前模型的编辑上限。1.2 可勾选多轮编辑，不必重传成片。不能改配音。",
-    placeholder: "例：Make the lighting warmer. Keep everything else the same.",
-    promptLabel: "Edit instruction（简短指令）",
-    button: "Continue edit",
-  },
-  edit: {
-    title: "Edit video — 对指定视频做一次局部改动",
-    task: "task=edit",
-    steps: [
-      "填入已完成任务，或粘贴任意 gs:// 源视频。",
-      "同样是短指令；与 Continue 调用同一接口，只是源视频填写方式不同。",
-    ],
-    note: "不能改配音或台词。1.2 最长编辑 15 秒，并可附最多 2 张参考图。1.1 最长 10 秒。",
-    placeholder: "例：Remove the tablet from her hands. Keep everything else the same.",
-    promptLabel: "Edit instruction",
-    button: "Edit video",
-  },
-  extend: {
-    title: "Extend — 从片尾往后接",
-    task: "task=extend",
-    steps: [
-      "选择源视频。描述接下来几秒发生什么，不要重述原片。",
-      "Duration 是本次新增长度（3–10s，不是 15s）。返回拼接后的完整成片。",
-      "例如 8s 源片再续 8s → 约 16s。不要按 15+15+15 规划到 45s。",
-      "「看约 10 秒」是上下文；「留约 30 秒」是成片里保留的源片末尾。两件事不一样。",
-      "续写始终重传 gs:// 并带 task=extend。多轮 id 只用于编辑，和 task 不能同时出现。",
-    ],
-    note: "",
-    placeholder: "例：Continue as they watch the interface light up and smile.",
-    promptLabel: "What happens next",
-    button: "Extend video",
-    enhance: "续写指令会略作镜头/节奏润色，不改人物和画风。",
-  },
-  upscale: {
-    title: "Upscale — 只提高分辨率",
-    task: "task=upscale",
-    steps: [
-      "选一条不超过 15 秒的成片，或粘贴 gs:// 源视频。",
-      "把 Resolution 选得比源片更高。官方建议先用 360p / 720p 出草稿，再放大到 1080p 或 4K。",
-      "不要写提示词。线上会拒绝任何文字：“Text input is not supported for upscale task.”",
-    ],
-    note: "只在 Omni 1.2。请求里只有源视频和目标分辨率，不能改内容、运镜或对白。这不是 Cloud Transcoder 的转码。",
-    placeholder: "",
-    promptLabel: "Prompt",
-    button: "Upscale video",
-  },
-};
-
-function currentGuide() {
-  if (currentMode === "generate") return GEN_GUIDE[currentGenTask];
-  return MODE_GUIDE[currentMode];
+// How many stills the selected function takes. Upscale takes the clip alone.
+function imageLimit(c = currentCap(), p = profile()) {
+  if (c.mode === "generate") return c.images;
+  if (c.mode === "upscale") return 0;
+  return p.edit_reference_images_max || 0;
 }
-
-function setStatus(text) {
-  statusLine.textContent = text;
-}
-
-function renderExampleChips() {
-  exampleChips.innerHTML = "";
-  if (exampleRow) exampleRow.hidden = false;
-  const items =
-    currentMode === "generate"
-      ? generateExamples(currentGenTask).map((item, i) => ({
-          label: item.label,
-          apply: () => applyGenerateExample(currentGenTask, i),
-        }))
-      : modeExamples(currentMode).map((text, i) => ({
-          label: String(text).replace(/^Continue as /i, "").slice(0, 18),
-          apply: () => applyModeExample(currentMode, i),
-        }));
-  for (const item of items) {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "example-chip";
-    btn.textContent = item.label;
-    btn.addEventListener("click", () => {
-      item.apply();
-      exampleChips.querySelectorAll(".example-chip").forEach((el) => {
-        el.classList.toggle("active", el === btn);
-      });
-    });
-    exampleChips.appendChild(btn);
-  }
-  if (exampleRow) exampleRow.hidden = items.length === 0;
-}
-
-function applyGuide() {
-  const g = currentGuide();
-  guideTitle.textContent = g.title;
-  guideTask.innerHTML = `<code>${g.task}</code>`;
-  guideSteps.innerHTML = "";
-  for (const step of g.steps) {
-    const li = document.createElement("li");
-    li.textContent = step;
-    guideSteps.appendChild(li);
-  }
-  guideNote.textContent =
-    currentMode === "extend"
-      ? extendInputSummary(activeProfile())
-      : currentMode === "continue" || currentMode === "edit"
-        ? editGuideNote(activeProfile())
-        : g.note;
-  promptLabel.textContent = g.promptLabel;
-  promptEl.placeholder = g.placeholder;
-  generateBtn.textContent = g.button;
-  if (enhanceHint && g.enhance) enhanceHint.textContent = g.enhance;
-  renderExampleChips();
-}
-
-function syncImageSlots() {
-  const g = GEN_GUIDE[currentGenTask];
-  if (!g || currentMode !== "generate") return;
-  const want = g.slots;
-  if (want === 0) return;
-  if (want === "n") {
-    if (!imageListEl.children.length) addImageRow({ label: "@图片1" });
-    return;
-  }
-  const labels = g.slotLabels || [];
-  while (imageListEl.children.length > want) {
-    imageListEl.lastElementChild.remove();
-  }
-  while (imageListEl.children.length < want) {
-    addImageRow({ label: labels[imageListEl.children.length] || "图" });
-  }
-  [...imageListEl.children].forEach((row, i) => {
-    const lab = row.querySelector(".idx");
-    if (lab) lab.textContent = labels[i] || `图 ${i + 1}`;
-    const remove = row.querySelector("[data-action=remove]");
-    if (remove) remove.hidden = true;
-  });
-}
-
-function setGenTask(kind) {
-  currentGenTask = kind;
-  genTabs.querySelectorAll("[data-gen]").forEach((btn) => {
-    btn.classList.toggle("active", btn.dataset.gen === kind);
-  });
-  const guide = GEN_GUIDE[kind];
-  if (currentMode === "generate" && guide && guide.slots !== 0) syncImageSlots();
-  applyGuide();
-  applyDurationForMode();
-  applyCapabilityChrome();
-}
-
-const MODE_STARTER = {
-  continue: "Make the lighting warmer. Keep everything else the same.",
-  edit: "A slow push-in. Keep everything else the same.",
-  extend: "Continue as the camera slowly pulls back on the same scene.",
-  upscale: "",
-};
-const draftPrompt = {};
-const draftResolution = {};
-const draftDuration = {};
-const imageStash = {};
-
-function imageStashKey(mode) {
-  if (mode === "generate") return "generate";
-  if (mode === "continue" || mode === "edit" || mode === "extend") return "followup";
-  return null;
-}
-
-function stashImages(key) {
-  const frag = document.createDocumentFragment();
-  while (imageListEl.firstChild) frag.appendChild(imageListEl.firstChild);
-  imageStash[key] = frag;
-}
-
-function restoreImages(key) {
-  imageListEl.replaceChildren();
-  const frag = imageStash[key];
-  if (frag) imageListEl.appendChild(frag);
-}
-
-function rememberPrompt(mode) {
-  if (!mode) return;
-  if (mode !== "upscale") draftPrompt[mode] = promptEl.value;
-  draftResolution[mode] = document.getElementById("resolution").value;
-  draftDuration[mode] = durationEl.value;
-}
-
-function restorePrompt(mode) {
-  if (mode === "upscale") {
-    promptEl.value = "";
-  } else if (typeof draftPrompt[mode] === "string") {
-    promptEl.value = draftPrompt[mode];
-    if (!promptEl.value.trim() && MODE_STARTER[mode]) promptEl.value = MODE_STARTER[mode];
-  } else {
-    promptEl.value = MODE_STARTER[mode] || "";
-  }
-  const resolution = draftResolution[mode];
-  const resolutionEl = document.getElementById("resolution");
-  if (resolution && [...resolutionEl.options].some((opt) => opt.value === resolution)) {
-    resolutionEl.value = resolution;
-  }
-  const duration = draftDuration[mode];
-  if (duration && [...durationEl.options].some((opt) => opt.value === duration)) {
-    durationEl.value = duration;
-  }
-}
-
-function raiseLowUpscaleResolution() {
-  applyUpscaleResolutionChoices();
-}
-
-function setMode(mode) {
-  if (mode === "upscale" && !activeProfile().supports_upscale) {
-    mode = "generate";
-    setStatus("当前模型没有单独放大，已回到 Generate。");
-  }
-  const previousMode = currentMode;
-  const switching = previousMode !== mode;
-  if (switching) {
-    rememberPrompt(previousMode);
-    const fromKey = imageStashKey(previousMode);
-    const toKey = imageStashKey(mode);
-    if (fromKey && fromKey !== toKey) stashImages(fromKey);
-    if (toKey && fromKey !== toKey) restoreImages(toKey);
-    if (!toKey) imageListEl.replaceChildren();
-  }
-  currentMode = mode;
-  document.querySelectorAll("#modeTabs .mode-tab").forEach((btn) => {
-    btn.classList.toggle("active", btn.dataset.mode === mode);
-  });
-
-  const isGenerate = mode === "generate";
-
-  if (isGenerate) {
-    setGenTask(currentGenTask);
-  } else {
-    applyGuide();
-    applyDurationForMode();
-    applyCapabilityChrome();
-  }
-  if (switching) {
-    if (mode !== "upscale") setResolutionOptions(ALL_RESOLUTIONS);
-    restorePrompt(mode);
-    if (!isGenerate && selectedJob && selectedJob.video_uri) applySourceJob(selectedJob);
-  }
-  if (mode === "upscale") applyUpscaleResolutionChoices();
-  else if (!switching) setResolutionOptions(ALL_RESOLUTIONS, document.getElementById("resolution").value);
-}
-
-function applySourceJob(job) {
-  if (!job) return;
-  selectedJob = job;
-  sourceJobIdEl.value = job.id || "";
-  sourceVideoUriEl.value = job.video_uri || "";
-  if (job.status === "completed" && job.video_uri) {
-    resultActions.hidden = false;
-  }
-  if (currentMode === "upscale") applyUpscaleResolutionChoices();
-}
-
-function extractUrlsLocally(text) {
-  const urls = [];
-  let cleaned = text;
-
-  const tryParseArray = (raw) => {
-    try {
-      return JSON.parse(raw);
-    } catch {
-      try {
-        return JSON.parse(raw.replace(/,\s*]/, "]"));
-      } catch {
-        return null;
-      }
-    }
-  };
-
-  const labeled =
-    /(?:参考图|references?|image[_ ]?urls?)\s*[:：]?\s*(\[[\s\S]*?\])/gi;
-  let match;
-  while ((match = labeled.exec(text)) !== null) {
-    const parsed = tryParseArray(match[1]);
-    if (Array.isArray(parsed)) {
-      for (const item of parsed) {
-        if (typeof item === "string" && /^https?:\/\//i.test(item)) urls.push(item);
-      }
-      cleaned = cleaned.replace(match[0], "\n");
-    }
-  }
-
-  if (!urls.length) {
-    const bare = text.match(/\[\s*"https?:\/\/[\s\S]*?\]/);
-    if (bare) {
-      const parsed = tryParseArray(bare[0]);
-      if (Array.isArray(parsed)) {
-        for (const item of parsed) {
-          if (typeof item === "string" && /^https?:\/\//i.test(item)) urls.push(item);
-        }
-        cleaned = cleaned.replace(bare[0], "\n");
-      }
-    }
-  }
-
-  if (!urls.length) {
-    const stripped = text.trim();
-    if (stripped.startsWith("[") && stripped.endsWith("]")) {
-      const parsed = tryParseArray(stripped);
-      if (
-        Array.isArray(parsed) &&
-        parsed.every((x) => typeof x === "string" && /^https?:\/\//i.test(x))
-      ) {
-        return { prompt: "", urls: uniqueUrls(parsed) };
-      }
-    }
-  }
-
-  if (!urls.length) {
-    const loose = text.match(/https?:\/\/[^\s"'<>\]]+/gi) || [];
-    for (const u of loose) urls.push(u);
-    for (const u of urls) cleaned = cleaned.replace(u, "");
-  }
-
-  cleaned = cleaned
-    .replace(/^\s*(参考图|references?|image[_ ]?urls?)\s*[:：]?\s*$/gim, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-
-  return { prompt: cleaned, urls: uniqueUrls(urls) };
-}
-
-function uniqueUrls(list) {
-  const seen = new Set();
-  const out = [];
-  for (let u of list) {
-    u = String(u).trim().replace(/[.,;]+$/, "");
-    if (!u || seen.has(u)) continue;
-    seen.add(u);
-    out.push(u);
-  }
-  return out;
-}
-
-function setImageRows(urls, { labels } = {}) {
-  imageListEl.innerHTML = "";
-  const list = urls && urls.length ? urls : [""];
-  list.forEach((url, i) => {
-    addImageRow({
-      url,
-      label: (labels && labels[i]) || `@图片${i + 1}`,
-      removable: currentGenTask === "reference_to_video",
-    });
-  });
-}
-
-function addImageRow({ url = "", label = "", removable = true, file = null } = {}) {
-  const idx = imageListEl.children.length + 1;
-  const row = document.createElement("div");
-  row.className = "image-row";
-
-  const thumb = document.createElement("div");
-  thumb.className = "thumb placeholder";
-  thumb.textContent = label || `图 ${idx}`;
-
-  const mid = document.createElement("div");
-  mid.className = "mid";
-  const idxEl = document.createElement("div");
-  idxEl.className = "idx";
-  idxEl.textContent = label || `@图片${idx}`;
-  const input = document.createElement("input");
-  input.type = "url";
-  input.placeholder = "https://… image URL";
-  input.value = url;
-  const fileName = document.createElement("p");
-  fileName.className = "file-name";
-  fileName.hidden = true;
-  const refreshThumb = () => updateThumb(row, input.value.trim(), idxEl.textContent);
-  input.addEventListener("change", () => {
-    rowPayloads.delete(row);
-    fileName.hidden = true;
-    refreshThumb();
-  });
-  input.addEventListener("blur", refreshThumb);
-  mid.append(idxEl, input, fileName);
-
-  const actions = document.createElement("div");
-  actions.className = "row-actions";
-  const upload = document.createElement("button");
-  upload.type = "button";
-  upload.className = "ghost";
-  upload.textContent = "Upload";
-  upload.addEventListener("click", () => pickFilesForRow(row));
-  const remove = document.createElement("button");
-  remove.type = "button";
-  remove.className = "ghost danger";
-  remove.dataset.action = "remove";
-  remove.textContent = "Remove";
-  remove.hidden = !removable;
-  remove.addEventListener("click", () => {
-    if (imageListEl.children.length <= 1 && currentGenTask !== "reference_to_video") {
-      return;
-    }
-    row.remove();
-    relabelReferenceRows();
-  });
-  actions.append(upload, remove);
-
-  row.append(thumb, mid, actions);
-  imageListEl.appendChild(row);
-  if (file) applyFileToRow(row, file);
-  else if (url) refreshThumb();
-}
-
-function relabelReferenceRows() {
-  if (currentGenTask !== "reference_to_video") return;
-  [...imageListEl.children].forEach((row, i) => {
-    const lab = row.querySelector(".idx");
-    if (lab) lab.textContent = `@图片${i + 1}`;
-  });
-}
-
-function updateThumb(row, url, label) {
-  const node = row.querySelector(".thumb, img.thumb");
-  if (!node) return;
-  if (rowPayloads.get(row)?.preview) {
-    const img = document.createElement("img");
-    img.className = "thumb";
-    img.alt = label;
-    img.src = rowPayloads.get(row).preview;
-    node.replaceWith(img);
-    return;
-  }
-  if (!url) {
-    const placeholder = document.createElement("div");
-    placeholder.className = "thumb placeholder";
-    placeholder.textContent = label || "图";
-    node.replaceWith(placeholder);
-    return;
-  }
-  const img = document.createElement("img");
-  img.className = "thumb";
-  img.alt = label;
-  img.src = url;
-  img.onerror = () => {
-    const placeholder = document.createElement("div");
-    placeholder.className = "thumb placeholder";
-    placeholder.textContent = "load fail";
-    img.replaceWith(placeholder);
-  };
-  node.replaceWith(img);
-}
-
-function pickFilesForRow(row) {
-  const picker = document.createElement("input");
-  picker.type = "file";
-  picker.accept = filePicker.accept;
-  picker.addEventListener("change", async () => {
-    const file = picker.files && picker.files[0];
-    if (file) await applyFileToRow(row, file);
-  });
-  picker.click();
-}
-
-async function applyFileToRow(row, file) {
-  const payload = await fileToPayload(file);
-  rowPayloads.set(row, payload);
-  const input = row.querySelector('input[type="url"]');
-  if (input) input.value = "";
-  const nameEl = row.querySelector(".file-name");
-  if (nameEl) {
-    nameEl.hidden = false;
-    nameEl.textContent = file.name;
-  }
-  updateThumb(row, "", row.querySelector(".idx")?.textContent || file.name);
-}
-
-async function fileToPayload(file) {
-  const dataUrl = await new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ""));
-    reader.onerror = () => reject(reader.error || new Error("read failed"));
-    reader.readAsDataURL(file);
-  });
-  const comma = dataUrl.indexOf(",");
-  const data = comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl;
-  const preview = URL.createObjectURL(file);
+function defaultDraft() {
   return {
-    mime_type: file.type || "image/png",
-    data,
-    name: file.name,
-    preview,
+    prompt: "",
+    duration: 8,
+    resolution: "720p",
+    aspect: "16:9",
+    images: [],
+    videos: [],
+    sourceId: "",
+    sourceUri: "",
+    sourceAsset: null,
+    seed: "",
+    labels: "",
+    stateful: true,
+    enhance: false,
   };
 }
-
-async function handleUploadFiles(fileList) {
-  const files = [...fileList].filter((f) => f.type.startsWith("image/") || !f.type);
-  if (!files.length) return;
-  if (currentGenTask === "image_to_video") {
-    const row = imageListEl.children[0] || addImageRow({ label: "首帧", removable: false });
-    await applyFileToRow(row, files[0]);
-    return;
-  }
-  if (currentGenTask === "frames_to_video") {
-    syncImageSlots();
-    if (files[0] && imageListEl.children[0]) await applyFileToRow(imageListEl.children[0], files[0]);
-    if (files[1] && imageListEl.children[1]) await applyFileToRow(imageListEl.children[1], files[1]);
-    return;
-  }
-  for (const file of files) {
-    const empty = [...imageListEl.children].find(
-      (row) => !rowPayloads.get(row) && !row.querySelector('input[type="url"]')?.value
-    );
-    if (empty) await applyFileToRow(empty, file);
-    else addImageRow({ file, removable: true });
-  }
-  relabelReferenceRows();
+function draft() {
+  return (drafts[capId] ||= defaultDraft());
 }
-
-function autoFillFromPrompt({ silent = false } = {}) {
-  if (currentMode !== "generate" || currentGenTask !== "reference_to_video") {
-    return { urls: [] };
-  }
-  const text = promptEl.value;
-  if (!text.trim()) return { urls: [] };
-
-  const { prompt: cleaned, urls } = extractUrlsLocally(text);
-  if (!urls.length) {
-    if (!silent) setStatus("未在提示词中识别到参考图 URL");
-    return { urls: [] };
-  }
-
-  const key = urls.join("\n");
-  if (key !== lastFilledUrlsKey) {
-    setImageRows(urls);
-    lastFilledUrlsKey = key;
-  }
-
-  if (cleaned && cleaned !== text.trim()) {
-    promptEl.value = cleaned;
-  }
-
-  if (!silent) setStatus(`已自动填充 ${urls.length} 张参考图`);
-  return { urls, cleaned };
+function modelId() {
+  return $("model").value === "custom"
+    ? $("customModel").value.trim()
+    : $("model").value;
 }
-
-function scheduleAutoParse() {
-  if (parseTimer) clearTimeout(parseTimer);
-  parseTimer = setTimeout(() => {
-    if (currentMode !== "generate" || currentGenTask !== "reference_to_video") return;
-    if (!/https?:\/\//i.test(promptEl.value)) return;
-    autoFillFromPrompt({ silent: true });
-  }, 200);
-}
-
-async function loadHealth() {
-  try {
-    const res = await fetch("/api/health");
-    const data = await res.json();
-    catalog = data.models || [];
-    if (data.model && [...modelSelect.options].some((opt) => opt.value === data.model)) {
-      modelSelect.value = data.model;
+function profile() {
+  const id = modelId();
+  return (
+    catalog.find((c) => c.id === id) || {
+      id,
+      generate_min: 3,
+      generate_max: id.includes("1.2") ? 15 : 10,
+      frames_max: 10,
+      edit_max: id.includes("1.2") ? 15 : 10,
+      extend_min: 3,
+      extend_max: 10,
+      extend_input_max: id.includes("1.2") ? null : 30,
+      upscale_max: id.includes("1.2") ? 15 : null,
+      reference_images_max: 10,
+      edit_reference_images_max: id.includes("1.2") ? 2 : 0,
+      reference_videos_max: 3,
+      supports_seed: id.includes("1.2"),
+      supports_labels: id.includes("1.2"),
+      supports_multiturn: id.includes("1.2"),
+      supports_upscale: id.includes("1.2"),
     }
-    setMode(currentMode);
-    if (data.project_configured) {
-      healthState = { ok: true, proxy: data.active_proxy ? " · proxy on" : " · no proxy", offline: false };
-    } else {
-      healthState = { ok: false, proxy: "", offline: false };
-    }
-    paintHealth();
-  } catch {
-    healthState = { ok: false, proxy: "", offline: true };
-    paintHealth();
-  }
-}
-
-const exampleCursor = { continue: 0, edit: 0, extend: 0, upscale: 0, generate: 0 };
-
-async function pickSourceJob({ maxSeconds }) {
-  const res = await fetch("/api/jobs");
-  const data = await res.json();
-  return (data.jobs || []).find(
-    (j) =>
-      j.status === "completed" &&
-      j.video_uri &&
-      (maxSeconds == null || (j.duration_sec != null && j.duration_sec <= maxSeconds + 0.05))
   );
 }
-
-async function applyGenerateExample(kind, index) {
-  await ensureExamples();
-  setMode("generate");
-  setGenTask(kind);
-  const item = generateExamples(kind)[index];
-  if (!item) return;
-  promptEl.value = item.prompt || "";
-  if (item.duration) document.getElementById("duration").value = String(item.duration);
-  if (item.aspect_ratio) document.getElementById("aspectRatio").value = item.aspect_ratio;
-  document.getElementById("resolution").value = item.resolution || "720p";
-  const labels = GEN_GUIDE[kind].slotLabels;
-  if (kind === "text_to_video") {
-    imageListEl.innerHTML = "";
-  } else {
-    setImageRows(item.image_urls || [], { labels });
-    if (kind === "reference_to_video" && !(item.image_urls || []).length) {
-      addImageRow({ removable: true });
-    }
-    syncImageSlots();
-  }
-  lastFilledUrlsKey = "";
-  setStatus(`已填入「${item.label || "示例"}」· ${GEN_GUIDE[kind].task}`);
+function toast(text) {
+  $("toast").textContent = text;
+  $("toast").hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => ($("toast").hidden = true), 4500);
 }
-
-async function applyModeExample(mode, index) {
-  await ensureExamples();
-  const samples = modeExamples(mode);
-  if (!samples.length) return;
-  let text = samples[index % samples.length];
-  if (mode !== "extend" && mode !== "upscale" && !/keep everything else/i.test(text)) {
-    text += " Keep everything else the same.";
-  }
-  promptEl.value = text;
-  draftPrompt[mode] = promptEl.value;
-  if (mode === "extend") document.getElementById("duration").value = "8";
-  const profile = activeProfile();
-  const maxSeconds =
-    mode === "extend"
-      ? profile.extend_input_max
-      : mode === "upscale"
-        ? profile.upscale_max
-        : profile.edit_max;
-  const currentUri = sourceVideoUriEl.value.trim();
-  const currentId = sourceJobIdEl.value.trim();
-  const currentTooLong =
-    maxSeconds != null &&
-    selectedJob &&
-    selectedJob.duration_sec != null &&
-    selectedJob.duration_sec > maxSeconds + 0.05 &&
-    (selectedJob.id === currentId || selectedJob.video_uri === currentUri);
-  if (currentTooLong) {
-    setStatus(`示例已填入。当前源片 ${selectedJob.duration_sec}s 超过 ${maxSeconds}s，请换一条更短的成片。`);
-    return;
-  }
-  if (currentUri.startsWith("gs://") || currentId) {
-    setStatus("示例指令已填入，沿用当前源视频。");
-    return;
-  }
-  const source = await pickSourceJob({ maxSeconds });
-  if (!source) {
-    const limit = maxSeconds == null ? "任意长度" : `${maxSeconds}s 以内`;
-    setStatus(`示例指令已填入。请先 Generate 一条${limit}的片子，再选择源视频。`);
-    return;
-  }
-  applySourceJob(source);
-  setStatus(`示例已填入，源视频 job ${source.id}（${source.duration_sec ?? "?"}s）。`);
+function error(message) {
+  $("formError").textContent = message;
+  $("formError").hidden = !message;
 }
-
-async function loadGenerateExample() {
-  await ensureExamples();
-  const list = generateExamples(currentGenTask);
-  if (!list.length) {
-    setStatus("这个能力还没有示例");
-    return;
-  }
-  const idx = (exampleCursor.generate || 0) % list.length;
-  exampleCursor.generate = idx + 1;
-  await applyGenerateExample(currentGenTask, idx);
-}
-
-async function loadExample() {
-  if (currentMode === "generate") {
-    await loadGenerateExample();
-    return;
-  }
-  await ensureExamples();
-  const samples = modeExamples(currentMode);
-  if (!samples.length) {
-    setStatus("这个能力不使用提示词示例");
-    return;
-  }
-  const idx = exampleCursor[currentMode] % samples.length;
-  exampleCursor[currentMode] += 1;
-  await applyModeExample(currentMode, idx);
-}
-
-function showVideo(url) {
-  stageEmpty.hidden = true;
-  player.hidden = false;
-  player.src = url;
-  player.load();
-}
-
-function clearVideo() {
-  player.hidden = true;
-  player.removeAttribute("src");
-  stageEmpty.hidden = false;
-}
-
-const MODE_CHIP = { edit: "Edit", extend: "Extend", upscale: "Upscale" };
-
-function applySuggestion(job, suggestion) {
-  applySourceJob(job);
-  setMode(suggestion.mode);
-  promptEl.value = suggestion.instruction;
-  draftPrompt[suggestion.mode] = suggestion.instruction;
-  promptEl.focus();
-  setStatus(
-    `已采用建议：${suggestion.label}。源视频取自 job ${job.id}，点「${
-      suggestion.mode === "edit" ? "Edit video" : "Extend video"
-    }」开始。`
-  );
-}
-
-async function renderSuggestions(job) {
-  suggestionBubbles.innerHTML = "";
-  suggestions.hidden = true;
-  if (job.status !== "completed" || !job.video_uri) return;
-
-  let items = [];
+async function api(url, options = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), options.timeout || 45000);
   try {
-    const res = await fetch(`/api/jobs/${job.id}/suggestions`);
-    if (!res.ok) return;
-    items = (await res.json()).suggestions || [];
-  } catch {
-    return;
-  }
-  if (!items.length) return;
-
-  for (const item of items) {
-    const bubble = document.createElement("button");
-    bubble.type = "button";
-    bubble.className = "bubble";
-    bubble.title = item.instruction;
-
-    const mode = document.createElement("span");
-    mode.className = "bubble-mode";
-    mode.textContent = MODE_CHIP[item.mode] || item.mode;
-
-    const text = document.createElement("span");
-    text.className = "bubble-text";
-    text.textContent = item.label;
-
-    bubble.append(mode, text);
-    bubble.addEventListener("click", () => applySuggestion(job, item));
-    suggestionBubbles.appendChild(bubble);
-  }
-
-  const editMax = job.edit_max_sec || activeProfile().edit_max;
-  suggestionsTitle.textContent =
-    job.duration_sec > editMax + 0.05
-      ? `下一步试试（当前 ${job.duration_sec}s，超过 ${editMax}s 只能续写）`
-      : "下一步试试（点击即可填入指令与源视频）";
-  suggestions.hidden = false;
-}
-
-const CLIP_LABEL = {
-  generate: "初次生成",
-  text_to_video: "文生视频",
-  image_to_video: "首帧",
-  frames_to_video: "首尾帧",
-  reference_to_video: "参考",
-  continue: "继续编辑",
-  edit: "编辑",
-  extend: "续写",
-  upscale: "放大",
-};
-
-function comparisonPlayers() {
-  return Array.from(comparisonGrid.querySelectorAll("video"));
-}
-
-function clipCard({ title, subtitle, prompt, src, current }) {
-  const card = document.createElement("figure");
-  card.className = `clip-card${current ? " current" : ""}`;
-
-  const head = document.createElement("figcaption");
-  const name = document.createElement("strong");
-  name.textContent = title;
-  const meta = document.createElement("span");
-  meta.textContent = subtitle;
-  head.append(name, meta);
-
-  const video = document.createElement("video");
-  video.controls = true;
-  video.playsInline = true;
-  video.preload = "metadata";
-  video.src = src;
-
-  card.append(head, video);
-  if (prompt) {
-    const p = document.createElement("p");
-    p.className = "clip-prompt";
-    p.textContent = prompt;
-    card.appendChild(p);
-  }
-  return card;
-}
-
-async function renderComparison(jobId) {
-  let data;
-  try {
-    const res = await fetch(`/api/jobs/${jobId}/lineage`);
-    if (!res.ok) throw new Error(await res.text());
-    data = await res.json();
-  } catch {
-    comparison.hidden = true;
-    return;
-  }
-
-  const clips = data.clips || [];
-  // A lone clip has nothing to compare against.
-  if (clips.length + (data.external_source ? 1 : 0) < 2) {
-    comparison.hidden = true;
-    comparisonGrid.innerHTML = "";
-    return;
-  }
-
-  comparisonGrid.innerHTML = "";
-  if (data.external_source) {
-    comparisonGrid.appendChild(
-      clipCard({
-        title: "源视频",
-        subtitle: "本次会话之外的素材",
-        src: `/api/video?uri=${encodeURIComponent(data.external_source)}`,
-      })
-    );
-  }
-  clips.forEach((clip, idx) => {
-    const kind = clip.generate_task || clip.task || clip.mode;
-    const label = CLIP_LABEL[kind] || CLIP_LABEL[clip.mode] || clip.mode;
-    const length = clip.duration_sec ? `${clip.duration_sec}s` : "—";
-    comparisonGrid.appendChild(
-      clipCard({
-        title: `${idx + 1}. ${label}`,
-        subtitle: `${length} · ${clip.task || clip.mode}`,
-        prompt: clip.prompt,
-        src: clip.video_url,
-        current: clip.is_current,
-      })
-    );
-  });
-
-  comparisonHint.textContent =
-    `同一条素材衍生出 ${comparisonGrid.childElementCount} 个版本，按生成顺序排列，` +
-    "高亮的是当前任务。点「同步播放」可一起播放对比。";
-  comparison.hidden = false;
-}
-
-function renderJob(job) {
-  selectedJob = job;
-  jobIdEl.textContent = job.id ? `job ${job.id}` : "";
-  jobLog.textContent = JSON.stringify(
-    {
-      status: job.status,
-      message: job.message,
-      mode: job.meta && job.meta.mode,
-      task: job.meta && job.meta.task,
-      interaction_id: job.interaction_id,
-      video_uri: job.video_uri,
-      error: job.error,
-      meta: job.meta,
-      updated_at: job.updated_at,
-    },
-    null,
-    2
-  );
-
-  if (job.thoughts) {
-    thoughtsBlock.hidden = false;
-    thoughtsEl.textContent = job.thoughts;
-  } else {
-    thoughtsBlock.hidden = true;
-  }
-
-  const meta = job.meta || {};
-  if (meta.final_prompt_preview) {
-    promptBlock.hidden = false;
-    promptSent.textContent = meta.final_prompt_preview;
-    if (meta.prompt_enhanced) {
-      const before = (meta.prompt_original || "").length;
-      const after = meta.final_prompt_preview.length;
-      promptDiffNote.textContent = `已自动润色（${meta.prompt_enhance_reason}）：只补了运镜与转场，${before} → ${after} 字符。`;
-    } else if (meta.prompt_enhance_reason) {
-      promptDiffNote.textContent = `未润色，使用原始提示词（${meta.prompt_enhance_reason}）。`;
-    } else {
-      promptDiffNote.textContent = "使用原始提示词。";
-    }
-  } else {
-    promptBlock.hidden = true;
-  }
-
-  const canReuse = job.status === "completed" && Boolean(job.video_uri);
-  resultActions.hidden = !(canReuse || job.reuse_ready);
-  if (canReuse) applySourceJob(job);
-
-  const regenBtn = document.getElementById("regenBtn");
-  regenBtn.disabled = !job.reuse_ready;
-  regenBtn.title = job.reuse_ready
-    ? job.generate_task === "text_to_video"
-      ? "按同一分镜再跑一次 text_to_video"
-      : "复用该任务已上传到 GCS 的图片，不再重新上传"
-    : "该任务没有可复用的图片或分镜";
-
-  const editMax = job.edit_max_sec || activeProfile().edit_max;
-  const tooLongToEdit = job.duration_sec != null && job.duration_sec > editMax + 0.05;
-  for (const id of ["useForContinue", "useForEdit"]) {
-    const btn = document.getElementById(id);
-    btn.disabled = tooLongToEdit;
-    btn.title = tooLongToEdit
-      ? `源视频 ${job.duration_sec}s 超过 Edit 的 ${editMax}s 上限，请改用 Extend 或选择更短的片段`
-      : "";
-  }
-  const upscaleBtn = document.getElementById("useForUpscale");
-  const upscaleMax = job.upscale_max_sec || activeProfile().upscale_max;
-  const sourceRes = sourceOutputResolution(job);
-  const upscaleTargets = Object.prototype.hasOwnProperty.call(UPSCALE_FROM, sourceRes)
-    ? UPSCALE_FROM[sourceRes]
-    : null;
-  const tooLongToUpscale =
-    upscaleMax != null && job.duration_sec != null && job.duration_sec > upscaleMax + 0.05;
-  const noUpscaleTarget = upscaleTargets != null && upscaleTargets.length === 0;
-  const canUpscale = activeProfile().supports_upscale && !tooLongToUpscale && !noUpscaleTarget;
-  upscaleBtn.disabled = !canUpscale;
-  upscaleBtn.title = !activeProfile().supports_upscale
-    ? "当前模型没有单独放大"
-    : tooLongToUpscale
-      ? `放大要求源片不超过 ${upscaleMax} 秒`
-      : noUpscaleTarget
-        ? `${sourceRes} 不能再放大。官方不支持 1080p → 4k`
-        : "用 task=upscale 提高到更高分辨率。不能写提示词，也不能改内容";
-  const extendBtn = document.getElementById("useForExtend");
-  extendBtn.disabled = false;
-  extendBtn.title = "在片尾再接 3–10 秒。源片可为任意长度，成片保留末尾约 30 秒";
-
-  if (job.status === "completed" && job.video_url) {
-    showVideo(job.video_url);
-    setStatus(job.message || "Completed");
-    renderComparison(job.id);
-    renderSuggestions(job);
-    generateBtn.disabled = false;
-    testGcsBtn.disabled = false;
-  } else if (job.status === "failed") {
-    const short =
-      (job.message || "").split("\n")[0] ||
-      (job.error || "").split("\n")[0] ||
-      "Failed";
-    setStatus(short);
-    generateBtn.disabled = false;
-    testGcsBtn.disabled = false;
-  } else {
-    setStatus(job.message || job.status);
-  }
-}
-
-async function refreshJobList() {
-  const res = await fetch("/api/jobs");
-  const data = await res.json();
-  jobListEl.innerHTML = "";
-  for (const job of data.jobs || []) {
-    const li = document.createElement("li");
-    const mode = job.mode || (job.meta && job.meta.mode) || "generate";
-    const kind = job.generate_task || (job.meta && job.meta.generate_task) || mode;
-    const length = job.duration_sec ? ` · ${job.duration_sec}s` : "";
-    const left = document.createElement("span");
-    left.textContent = `${job.id} · ${CLIP_LABEL[kind] || kind}${length} · ${(job.message || job.status || "").slice(0, 28)}`;
-    const tag = document.createElement("span");
-    tag.className = `tag ${job.status}`;
-    tag.textContent = job.status;
-    li.append(left, tag);
-    li.addEventListener("click", () => {
-      renderJob(job);
-      if (job.status === "completed" && job.video_url) showVideo(job.video_url);
-      if (job.status === "completed") applySourceJob(job);
-      if (job.status !== "completed" && job.status !== "failed") {
-        startPolling(job.id);
-      }
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+      credentials: "same-origin",
     });
-    jobListEl.appendChild(li);
-  }
-}
-
-function startPolling(jobId) {
-  if (pollTimer) clearInterval(pollTimer);
-  pollTimer = setInterval(async () => {
+    let body;
     try {
-      const res = await fetch(`/api/jobs/${jobId}`);
-      if (!res.ok) return;
-      const job = await res.json();
-      renderJob(job);
-      await refreshJobList();
-      if (job.status === "completed" || job.status === "failed") {
-        clearInterval(pollTimer);
-        pollTimer = null;
-        generateBtn.disabled = false;
-        testGcsBtn.disabled = false;
-      }
-    } catch (err) {
-      setStatus(String(err));
+      body = await response.json();
+    } catch {
+      throw new Error(
+        response.status === 403
+          ? "Access denied. Open this demo with your Cloud Run access."
+          : `HTTP ${response.status}`,
+      );
     }
-  }, 2500);
-}
-
-function collectImageRefs() {
-  const refs = [];
-  for (const row of [...imageListEl.children]) {
-    const stored = rowPayloads.get(row);
-    if (stored?.data) {
-      refs.push({ mime_type: stored.mime_type || "image/png", data: stored.data });
-      continue;
+    if (!response.ok) {
+      const detail = body.detail;
+      const message =
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? detail
+                .map((x) => `${x.loc?.slice(-1)[0] || ""}: ${x.msg}`)
+                .join("\n")
+            : JSON.stringify(body);
+      const e = new Error(message);
+      e.status = response.status;
+      throw e;
     }
-    const url = row.querySelector('input[type="url"]')?.value.trim();
-    if (!url) continue;
-    if (!/^https?:\/\//i.test(url)) {
-      throw new Error("参考图请上传文件，或粘贴 http(s) 地址");
-    }
-    refs.push({ url, mime_type: mimeFromUrl(url) });
-  }
-  return refs;
-}
-
-function promptCitesImages(text) {
-  return /@图片\s*\d|@image\s*\d/i.test(text || "");
-}
-
-function mimeFromUrl(url) {
-  const lower = url.toLowerCase();
-  if (lower.includes(".png")) return "image/png";
-  if (lower.match(/\.jpe?g/)) return "image/jpeg";
-  if (lower.includes(".webp")) return "image/webp";
-  if (lower.includes(".gif")) return "image/gif";
-  return "image/jpeg";
-}
-
-async function prepareGenerateInput() {
-  if (currentGenTask === "reference_to_video") {
-    autoFillFromPrompt({ silent: true });
-  }
-  const prompt = promptEl.value.trim();
-  if (currentGenTask === "text_to_video") {
-    if (!prompt) throw new Error("请填写文生视频提示词");
-    return { prompt, referenceImages: [] };
-  }
-
-  const images = collectImageRefs();
-  const hasVideo = [...videoListEl.children].some((row) => {
-    const stored = videoPayloads.get(row);
-    const uri = row.querySelector("input")?.value.trim();
-    return Boolean(stored?.file || uri);
-  });
-  const need = currentGenTask === "frames_to_video" ? 2 : 1;
-  if (currentGenTask === "reference_to_video" && images.length === 0 && hasVideo) {
-    return { prompt, referenceImages: [] };
-  }
-  if (images.length < need) {
-    throw new Error(
-      currentGenTask === "frames_to_video"
-        ? "首尾帧需要两张图，可本地上传或粘贴 URL"
-        : "请上传或粘贴至少一张图"
-    );
-  }
-  return { prompt, referenceImages: images };
-}
-
-async function testGcsUpload() {
-  testGcsBtn.disabled = true;
-  generateBtn.disabled = true;
-  try {
-    const { referenceImages } = await prepareGenerateInput();
-    if (!referenceImages.length) {
-      throw new Error("没有可上传的图片");
-    }
-    setStatus(`Uploading ${referenceImages.length} image(s) → local → GCS…`);
-    const res = await fetch("/api/test-gcs-upload", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ reference_images: referenceImages }),
-    });
-    const job = await res.json();
-    if (!res.ok) {
-      throw new Error(job.detail || JSON.stringify(job));
-    }
-    renderJob(job);
-    await refreshJobList();
-    const gcs = (job.meta && job.meta.gcs_refs) || [];
-    setStatus(`GCS OK · ${gcs.length} object(s) under the configured input prefix.`);
-  } catch (err) {
-    setStatus(String(err));
+    return body;
   } finally {
-    testGcsBtn.disabled = false;
-    generateBtn.disabled = false;
+    clearTimeout(timer);
   }
 }
-
-async function regenerateFromJob(job) {
-  if (!job.reuse_ready) {
-    throw new Error("该任务没有可复用的图片或分镜");
-  }
-  setMode("generate");
-  const kind = job.generate_task || job.meta?.generate_task || "reference_to_video";
-  if (GEN_GUIDE[kind]) setGenTask(kind);
-  if (job.shot_list) promptEl.value = job.shot_list;
-
-  generateBtn.disabled = true;
-  testGcsBtn.disabled = true;
-  clearVideo();
-  comparison.hidden = true;
-  suggestions.hidden = true;
-  setStatus(
-    kind === "text_to_video"
-      ? "重新生成：沿用上次分镜…"
-      : "重新生成：复用 GCS 图片，不再重新上传…"
-  );
-
-  const body = {
-    prompt: (promptEl.value.trim() || job.shot_list || ""),
-    mode: "generate",
-    generate_task: kind,
-    reuse_job_id: job.id,
-    ...requestExtras(),
-    duration: Number(document.getElementById("duration").value),
-    resolution: document.getElementById("resolution").value,
-    aspect_ratio: document.getElementById("aspectRatio").value,
-    generate_audio: document.getElementById("generateAudio").checked,
-    no_subtitles: document.getElementById("noSubtitles").checked,
-    no_bgm: document.getElementById("noBgm").checked,
-    enhance_prompt: !enhanceToggle.hidden && enhancePromptEl.checked,
-    image_urls: [],
-    reference_images: [],
-  };
-  const res = await fetch("/api/generate", {
-    method: "POST",
+function jsonOptions(method, body) {
+  return {
+    method,
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
-  });
-  const created = await res.json();
-  if (!res.ok) {
-    throw new Error(
-      typeof created.detail === "string"
-        ? created.detail
-        : JSON.stringify(created.detail || created)
+  };
+}
+function persist() {
+  if (!workspace) return;
+  try {
+    const safe = {};
+    let files = false;
+    for (const [key, value] of Object.entries(drafts)) {
+      safe[key] = { ...value };
+      for (const type of ["images", "videos"])
+        safe[key][type] = value[type].map((item) => {
+          if (item.file && !item.uri) files = true;
+          return {
+            name: item.name,
+            url: item.url,
+            uri: item.uri,
+            mime_type: item.mime_type,
+            missing: Boolean(item.file && !item.uri) || item.missing,
+          };
+        });
+      if (value.sourceAsset) {
+        const a = value.sourceAsset;
+        if (a.file && !a.uri) files = true;
+        safe[key].sourceAsset = {
+          name: a.name,
+          uri: a.uri,
+          mime_type: a.mime_type,
+          missing: Boolean(a.file && !a.uri) || a.missing,
+        };
+      }
+    }
+    localStorage.setItem(
+      "omni-drafts-" + workspace.workspace,
+      JSON.stringify({
+        drafts: safe,
+        capId,
+        model: $("model").value,
+        custom: $("customModel").value,
+      }),
     );
+    $("draftStatus").textContent = t(files ? "draftFiles" : "savedDraft");
+  } catch {
+    $("draftStatus").textContent = t("draftFail");
   }
-  renderJob(created);
-  await refreshJobList();
-  startPolling(created.id);
 }
-
-function addVideoRow({ uri = "", file = null } = {}) {
-  const row = document.createElement("div");
-  row.className = "image-row";
-  const label = document.createElement("div");
-  label.className = "idx";
-  label.textContent = `视频 ${videoListEl.children.length + 1}`;
-  const input = document.createElement("input");
-  input.type = "text";
-  input.placeholder = "gs://bucket/clip.mp4，或用 Upload clips";
-  input.value = uri;
-  const remove = document.createElement("button");
-  remove.type = "button";
-  remove.className = "ghost";
-  remove.textContent = "移除";
-  remove.addEventListener("click", () => {
-    videoPayloads.delete(row);
-    row.remove();
+function readForm() {
+  const d = draft();
+  Object.assign(d, {
+    prompt: $("prompt").value,
+    duration: Number($("duration").value || 8),
+    resolution: $("resolution").value,
+    aspect: $("aspect").value,
+    sourceId: $("sourceJob").value,
+    sourceUri: $("sourceUri").value.trim(),
+    seed: $("seed").value,
+    labels: $("labels").value,
+    stateful: $("stateful").checked,
+    enhance: $("enhance").checked,
   });
-  if (file) {
-    input.value = file.name;
-    input.readOnly = true;
-    videoPayloads.set(row, { file });
-  }
-  row.append(label, input, remove);
-  videoListEl.appendChild(row);
-  return row;
+  return d;
 }
-
-async function collectReferenceVideos() {
-  const videos = [];
-  const rows = [...videoListEl.children];
-  if (rows.length > 3) throw new Error("参考视频最多 3 段");
-  for (const row of rows) {
-    const stored = videoPayloads.get(row);
-    if (stored?.file) {
-      const data = await fileToPayload(stored.file);
-      videos.push({
-        mime_type: stored.file.type || "video/mp4",
-        data: data.data,
-      });
+function saveDraft() {
+  readForm();
+  persist();
+}
+function restoreDrafts() {
+  try {
+    const raw = JSON.parse(
+      localStorage.getItem("omni-drafts-" + workspace.workspace) || "null",
+    );
+    if (raw) {
+      drafts = raw.drafts || {};
+      capId = capabilities.some((c) => c.id === raw.capId)
+        ? raw.capId
+        : "text_to_video";
+      $("model").value = raw.model || "gemini-omni-1.2-flash";
+      $("customModel").value = raw.custom || "";
+    }
+    lastAttempt = JSON.parse(
+      localStorage.getItem("omni-pending-" + workspace.workspace) || "null",
+    );
+  } catch {}
+  for (const c of capabilities) {
+    drafts[c.id] = { ...defaultDraft(), ...(drafts[c.id] || {}) };
+  }
+}
+function setOptions(select, values, wanted) {
+  select.replaceChildren(
+    ...values.map((value) => {
+      const o = node("option", "", String(value));
+      o.value = String(value);
+      return o;
+    }),
+  );
+  if (values.map(String).includes(String(wanted)))
+    select.value = String(wanted);
+}
+function renderCapabilities() {
+  const root = $("capabilities");
+  root.replaceChildren();
+  for (const c of capabilities) {
+    const b = button(
+      "",
+      () => switchCapability(c.id),
+      "capability" + (c.id === capId ? " active" : ""),
+    );
+    b.setAttribute("aria-pressed", String(c.id === capId));
+    b.append(node("span", "symbol", c.symbol), node("span", "", t(c.label)));
+    root.append(b);
+  }
+}
+function renderSourceOptions() {
+  const old = draft().sourceId;
+  const opts = [node("option", "", t("chooseSource"))];
+  opts[0].value = "";
+  for (const j of jobs.values()) {
+    if (j.status !== "completed" || !j.video_uri || j.library?.trashed)
       continue;
-    }
-    const uri = row.querySelector("input")?.value.trim() || "";
-    if (!uri) continue;
-    if (!uri.startsWith("gs://")) {
-      throw new Error("参考视频请上传文件，或粘贴 gs:// 地址");
-    }
-    videos.push({ mime_type: "video/mp4", uri });
+    const o = node("option", "", titleOf(j));
+    o.value = j.id;
+    opts.push(o);
   }
-  return videos;
+  $("sourceJob").replaceChildren(...opts);
+  if (old && !opts.some((o) => o.value === old)) {
+    const o = node("option", "", old);
+    o.value = old;
+    $("sourceJob").append(o);
+  }
+  $("sourceJob").value = old;
 }
-
-async function submitJob() {
-  const prompt = promptEl.value.trim();
-  if (!prompt && currentMode !== "upscale") {
-    setStatus("请填写提示词 / 编辑指令");
+function renderForm() {
+  const d = draft(),
+    c = currentCap(),
+    p = profile();
+  renderCapabilities();
+  $("capabilityTitle").textContent = t(c.label);
+  $("capabilityHelp").textContent = t(c.help);
+  $("capabilityDoc").href = docBase + c.doc;
+  $("prompt").value = d.prompt;
+  $("sourceSection").hidden = c.mode === "generate";
+  $("promptSection").hidden = c.id === "upscale";
+  $("sourceUri").value = d.sourceUri;
+  renderSourceOptions();
+  $("sourceFileName").textContent = d.sourceAsset?.name || "";
+  $("sourceSummary").hidden = !d.sourceId;
+  $("sourceSummary").textContent = d.sourceId
+    ? titleOf(jobs.get(d.sourceId) || { id: d.sourceId }) +
+      " · " +
+      t("keepInputs")
+    : "";
+  const imageCap = imageLimit(c, p);
+  $("imageSection").hidden = !imageCap;
+  $("videoSection").hidden = c.id !== "reference_to_video";
+  $("imageHelp").textContent =
+    c.id === "frames_to_video"
+      ? t("inputOrder")
+      : c.id === "reference_to_video"
+        ? t("refsHelp")
+        : "";
+  renderAttachments();
+  $("durationField").hidden = !["generate", "extend"].includes(c.mode);
+  $("durationLabel").textContent = t(
+    c.mode === "extend" ? "append" : "duration",
+  );
+  const max =
+    c.id === "frames_to_video"
+      ? p.frames_max
+      : c.mode === "extend"
+        ? p.extend_max
+        : p.generate_max;
+  setOptions(
+    $("duration"),
+    Array.from({ length: max - 2 }, (_, i) => i + 3),
+    d.duration,
+  );
+  d.duration = Number($("duration").value);
+  $("resolutionField").hidden = c.mode === "extend";
+  const source = jobs.get(d.sourceId);
+  const res =
+    c.id === "upscale"
+      ? upscaleTargets[
+          source?.output_resolution || source?.meta?.output_resolution
+        ] || (!source ? ["720p", "1080p", "4k"] : ["720p", "1080p", "4k"])
+      : ["360p", "720p", "1080p", "4k"];
+  setOptions($("resolution"), res, d.resolution);
+  d.resolution = $("resolution").value;
+  $("aspectField").hidden = c.mode !== "generate";
+  $("aspect").value = d.aspect;
+  $("seed").value = d.seed;
+  $("labels").value = d.labels;
+  $("stateful").checked = d.stateful;
+  $("enhance").checked = d.enhance;
+  $("seedField").hidden = !p.supports_seed;
+  $("labelsField").hidden = !p.supports_labels;
+  $("statefulField").hidden =
+    !p.supports_multiturn || !["edit", "continue"].includes(c.mode);
+  const polish = ["generate", "extend"].includes(c.mode);
+  $("enhanceField").hidden = !polish;
+  $("enhanceHelp").hidden = !polish;
+  $("customModelField").hidden = $("model").value !== "custom";
+  $("modelHelp").textContent =
+    $("model").value === "custom"
+      ? t("modelCustomHelp")
+      : `${p.generate_min}–${p.generate_max}s · ${t("edit")} ≤${p.edit_max}s · ${t("rateHint")}`;
+  $("modelBadge").textContent = p.label || modelId();
+  const unsupported = c.id === "upscale" && !p.supports_upscale;
+  $("generate").disabled = submitting || unsupported;
+  $("generate").replaceChildren(
+    node(
+      "span",
+      "",
+      t(submitting ? "working" : c.mode === "generate" ? "generate" : c.label),
+    ),
+    node("span", "", "↗"),
+  );
+  if (unsupported) error(t("notSupported"));
+  else error("");
+  if (lastAttempt) offerRetry(lastAttempt);
+}
+// A submission whose reply never arrived: retry the same one, or set it aside.
+function offerRetry(attempt) {
+  error(t("uncertain"));
+  const actions = node("div", "error-actions");
+  actions.append(
+    button(t("retrySubmit"), () => sendAttempt(attempt), "text-button"),
+    button(
+      t("setAside"),
+      () => {
+        lastAttempt = null;
+        localStorage.removeItem("omni-pending-" + workspace.workspace);
+        renderForm();
+      },
+      "text-button",
+    ),
+  );
+  $("formError").append(actions);
+}
+function switchCapability(id) {
+  if (booted) readForm();
+  capId = id;
+  renderForm();
+  persist();
+}
+function releaseMedia(item) {
+  if (item?.preview) URL.revokeObjectURL(item.preview);
+}
+function renderAttachments() {
+  const c = currentCap(),
+    d = draft();
+  for (const kind of ["images", "videos"]) {
+    const root = $(kind === "images" ? "imageItems" : "videoItems");
+    root.replaceChildren();
+    d[kind].forEach((item, index) => {
+      const row = node("div", "attachment");
+      if (kind === "images") {
+        const src = item.preview || item.url;
+        if (src && /^(blob:|https?:)/.test(src)) {
+          const img = node("img");
+          img.src = src;
+          img.alt = `${t("images")} ${index + 1}`;
+          img.loading = "lazy";
+          row.append(img);
+        }
+      }
+      const label = node(
+        "span",
+        "",
+        `${index + 1}. ${item.name || item.url || item.uri || t("fileReattach")}`,
+      );
+      label.title = label.textContent;
+      row.append(label);
+      const remove = button(
+        "×",
+        () => {
+          releaseMedia(item);
+          d[kind].splice(index, 1);
+          renderAttachments();
+          persist();
+        },
+        "icon-button",
+      );
+      remove.setAttribute("aria-label", `${t("remove")} ${index + 1}`);
+      row.append(remove);
+      if (item.missing) row.title = t("fileReattach");
+      root.append(row);
+    });
+  }
+  $("imageCount").textContent = `${d.images.length}/${imageLimit(c)}`;
+}
+function addFiles(kind, files) {
+  saveDraft();
+  const limit =
+    kind === "videos" ? profile().reference_videos_max : imageLimit();
+  if (draft()[kind].length + files.length > limit) {
+    error(t("tooMany"));
     return;
   }
-
-  generateBtn.disabled = true;
-  testGcsBtn.disabled = true;
-  clearVideo();
-  comparison.hidden = true;
-  suggestions.hidden = true;
-
-  try {
-    const base = {
-      prompt: currentMode === "upscale" ? "" : prompt,
-      mode: currentMode,
-      duration: Number(durationEl.value),
-      resolution: document.getElementById("resolution").value,
-      aspect_ratio: document.getElementById("aspectRatio").value,
-      generate_audio: document.getElementById("generateAudio").checked,
-      no_subtitles: document.getElementById("noSubtitles").checked,
-      no_bgm: document.getElementById("noBgm").checked,
-      image_urls: [],
-      reference_images: [],
-      reference_videos: [],
-      enhance_prompt: !enhanceToggle.hidden && enhancePromptEl.checked,
-      generate_task: currentMode === "generate" ? currentGenTask : undefined,
-      ...requestExtras(),
-    };
-    if (currentMode === "upscale" && !base.resolution) {
-      throw new Error("这条片子没有可放大的目标。官方不支持 1080p → 4k。");
+  for (const file of files) {
+    if (file.size > 20 * 1024 * 1024) {
+      error(t("fileLimit"));
+      return;
     }
-
-    if (currentMode === "generate") {
-      const prepared = await prepareGenerateInput();
-      base.prompt = prepared.prompt || prompt;
-      base.reference_images = prepared.referenceImages;
-      if (currentGenTask === "reference_to_video") {
-        base.reference_videos = await collectReferenceVideos();
-      }
-      const n = base.reference_images.length;
-      const v = base.reference_videos.length;
-      setStatus(
-        n || v
-          ? `Submitting ${currentGenTask}… (${n} image(s), ${v} video(s) → GCS → Omni)`
-          : `Submitting ${currentGenTask}…`
-      );
-    } else if (currentMode !== "upscale" && activeProfile().edit_reference_images_max > 0) {
-      const listed = collectImageRefs();
-      const cites = promptCitesImages(base.prompt);
-      const images = cites ? listed : [];
-      if (cites && !images.length) {
-        throw new Error("指令写了 @图片，请在下面放上对应的参考图");
-      }
-      const cap = activeProfile().edit_reference_images_max;
-      if (images.length > cap) throw new Error(`这次最多 ${cap} 张参考图`);
-      base.reference_images = images;
-      base.source_job_id = sourceJobIdEl.value.trim() || null;
-      base.source_video_uri = sourceVideoUriEl.value.trim() || null;
-      if (!base.source_video_uri && !base.source_job_id) {
-        throw new Error(`${currentMode} 需要提供 gs:// 源视频，或选择一条已完成的任务`);
-      }
-      setStatus(
-        !cites && listed.length
-          ? `Submitting ${currentMode}… 指令没有 @图片，参考图不上传。`
-          : images.length
-            ? `Submitting ${currentMode}… 参考图由服务端下载。`
-            : `Submitting ${currentMode}…`
-      );
-    } else {
-      base.source_job_id = sourceJobIdEl.value.trim() || null;
-      base.source_video_uri = sourceVideoUriEl.value.trim() || null;
-      if (!base.source_video_uri && !base.source_job_id) {
-        throw new Error(`${currentMode} 需要提供 gs:// 源视频，或选择一条已完成的任务`);
-      }
-      setStatus(`Submitting ${currentMode}…`);
-    }
-
-    const res = await fetch("/api/generate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(base),
+  }
+  for (const file of files)
+    draft()[kind].push({
+      file,
+      name: file.name,
+      mime_type: file.type,
+      preview: kind === "images" ? URL.createObjectURL(file) : null,
     });
-    const job = await res.json();
-    if (!res.ok) {
-      throw new Error(
-        typeof job.detail === "string" ? job.detail : JSON.stringify(job.detail || job)
-      );
-    }
-    renderJob(job);
-    await refreshJobList();
-    startPolling(job.id);
-  } catch (err) {
-    setStatus(String(err));
-    generateBtn.disabled = false;
-    testGcsBtn.disabled = false;
+  renderAttachments();
+  persist();
+}
+function showView(next) {
+  if (booted) saveDraft();
+  if ($("inspector").open) $("inspector").close();
+  view = next;
+  for (const id of ["studio", "library", "tasks", "reference"])
+    $(id + "View").hidden = id !== view;
+  document.querySelectorAll("[data-view]").forEach((b) => {
+    b.classList.toggle("active", b.dataset.view === view);
+    b.setAttribute("aria-current", b.dataset.view === view ? "page" : "false");
+  });
+  if (next !== "studio") stopPlayback();
+  if (next === "library") renderLibrary();
+  if (next === "tasks") renderTasks();
+  if (next === "reference") renderReference();
+  history.replaceState(null, "", next === "reference" ? "/docs" : "/#" + next);
+}
+function stopPlayback() {
+  document.querySelectorAll("video").forEach((v) => v.pause());
+}
+function showInspector() {
+  if (view === "studio") return;
+  $("closeInspector").hidden = false;
+  $("inspector").append(preview);
+  if (!$("inspector").open) $("inspector").showModal();
+}
+$("inspector").addEventListener("close", () => {
+  stopPlayback();
+  $("previewHost").append(preview);
+  $("closeInspector").hidden = true;
+});
+function emptyState(title, help, cta = false) {
+  const n = node("div", "empty-state");
+  n.append(
+    node("span", "symbol", "✦"),
+    node("h2", "", t(title)),
+    node("p", "", t(help)),
+  );
+  if (cta) n.append(button(t("newWork"), () => showView("studio"), "primary"));
+  return n;
+}
+function searchable(job) {
+  return [
+    job.id,
+    titleOf(job),
+    job.shot_list,
+    job.library?.collection,
+    job.library?.notes,
+    job.model,
+    job.mode,
+  ]
+    .join(" ")
+    .toLowerCase();
+}
+function renderCollections() {
+  const values = [
+    ...new Set(
+      [...jobs.values()].map((j) => j.library?.collection).filter(Boolean),
+    ),
+  ].sort();
+  const signature = JSON.stringify(values) + language;
+  if (signature === collectionSignature) return;
+  collectionSignature = signature;
+  const selected = $("collectionFilter").value;
+  $("collectionFilter").replaceChildren(
+    node("option", "", t("allCollections")),
+  );
+  $("collectionFilter").firstChild.value = "";
+  $("collectionNames").replaceChildren();
+  for (const v of values) {
+    const o = node("option", "", v);
+    o.value = v;
+    $("collectionFilter").append(o);
+    $("collectionNames").append(o.cloneNode(true));
+  }
+  $("collectionFilter").value = values.includes(selected) ? selected : "";
+}
+function renderLibrary() {
+  renderCollections();
+  const root = $("libraryGrid"),
+    search = $("librarySearch").value.toLowerCase(),
+    filter = $("libraryFilter").value,
+    group = $("collectionFilter").value;
+  const all = [...jobs.values()].filter(
+    (j) => j.status === "completed" && j.video_url,
+  );
+  const rows = all.filter((j) => {
+    const l = j.library || {};
+    if (filter === "trash" ? !l.trashed : l.trashed) return false;
+    if (filter === "archived" ? !l.archived : filter !== "trash" && l.archived)
+      return false;
+    if (filter === "favorites" && !l.favorite) return false;
+    return (!group || l.collection === group) && searchable(j).includes(search);
+  });
+  root.replaceChildren();
+  if (!rows.length) {
+    root.append(
+      emptyState(
+        all.length ? "noMatches" : "noWorks",
+        all.length ? "noMatchesHelp" : "noWorksHelp",
+        !all.length,
+      ),
+    );
+    $("moreWorks").hidden = true;
+    return;
+  }
+  for (const job of rows.slice(0, showLimit)) {
+    const card = node("article", "work-card");
+    const open = button("", () => selectJob(job.id, true), "card-open");
+    const media = node("div", "card-media");
+    const v = node("video");
+    v.muted = true;
+    v.playsInline = true;
+    v.preload = "none";
+    v.dataset.src = job.video_url + "#t=0.1";
+    v.setAttribute("aria-hidden", "true");
+    media.append(v, node("span", "play-mark", "▶"));
+    const copy = node("div", "card-copy");
+    copy.append(
+      node("h3", "", titleOf(job)),
+      node(
+        "p",
+        "",
+        `${t(kindOf(job))} · ${job.duration_sec ? job.duration_sec.toFixed(1) + "s" : "—"} · ${fmtTime(job.created_at)}`,
+      ),
+    );
+    open.append(media, copy);
+    card.append(open);
+    const favorite = button(
+      job.library?.favorite ? "★" : "☆",
+      () =>
+        updateLibrary(job, { favorite: !job.library?.favorite }).catch((e) =>
+          toast(e.message),
+        ),
+      "card-favorite",
+    );
+    favorite.setAttribute("aria-label", t("favorite"));
+    favorite.setAttribute(
+      "aria-pressed",
+      String(Boolean(job.library?.favorite)),
+    );
+    card.append(favorite);
+    root.append(card);
+    thumbObserver.observe(v);
+  }
+  $("moreWorks").hidden = rows.length <= showLimit;
+}
+const thumbObserver = new IntersectionObserver(
+  (entries) => {
+    for (const e of entries)
+      if (e.isIntersecting) {
+        const video = e.target;
+        if (video.dataset.src) {
+          video.src = video.dataset.src;
+          video.preload = "metadata";
+          delete video.dataset.src;
+        }
+        thumbObserver.unobserve(video);
+      }
+  },
+  { rootMargin: "100px" },
+);
+function renderTasks() {
+  const root = $("taskList"),
+    search = $("taskSearch").value.toLowerCase(),
+    filter = $("taskFilter").value;
+  const all = [...jobs.values()];
+  const rows = all.filter(
+    (j) =>
+      !j.library?.trashed &&
+      searchable(j).includes(search) &&
+      (filter === "all" ||
+        (filter === "active" && !terminal.has(j.status)) ||
+        (filter === "completed" && j.status === "completed") ||
+        (filter === "failed" && ["failed", "interrupted"].includes(j.status))),
+  );
+  root.replaceChildren();
+  if (!rows.length) {
+    root.append(
+      emptyState(
+        all.length ? "noMatches" : "noTasks",
+        all.length ? "noMatchesHelp" : "noTasksHelp",
+      ),
+    );
+    return;
+  }
+  for (const j of rows) {
+    const row = button("", () => selectJob(j.id, true), "task-row");
+    const copy = node("span", "task-copy");
+    copy.append(
+      node("strong", "", titleOf(j)),
+      node(
+        "small",
+        "",
+        `${t(kindOf(j))} · ${j.model || j.meta?.model || "Omni"} · ${j.id.slice(0, 8)}`,
+      ),
+    );
+    row.append(
+      node(
+        "span",
+        "task-icon",
+        capabilities.find((c) => c.label === kindOf(j))?.symbol || "◈",
+      ),
+      copy,
+      node("span", "task-time", fmtTime(j.created_at)),
+      node("span", "status-pill " + j.status, t(j.status)),
+      node("span", "", "↗"),
+    );
+    root.append(row);
   }
 }
-
-enhancePromptEl.addEventListener("change", () => syncVisibleFields());
-document.querySelectorAll("#modeTabs .mode-tab").forEach((btn) => {
-  btn.addEventListener("click", () => setMode(btn.dataset.mode));
-});
-document.querySelectorAll("#genTabs [data-gen]").forEach((btn) => {
-  btn.addEventListener("click", () => setGenTask(btn.dataset.gen));
-});
-
-document.getElementById("playAllBtn").addEventListener("click", () => {
-  for (const v of comparisonPlayers()) {
-    v.currentTime = 0;
-    v.muted = true;
-    v.play().catch(() => {});
+function renderRecent() {
+  const root = $("recentItems");
+  root.replaceChildren();
+  for (const j of [...jobs.values()]
+    .filter((j) => !j.library?.trashed)
+    .slice(0, 4)) {
+    const row = button("", () => selectJob(j.id, false), "recent-row");
+    const copy = node("span", "recent-text");
+    copy.append(
+      node("strong", "", titleOf(j)),
+      node("small", "", `${t(kindOf(j))} · ${fmtTime(j.created_at)}`),
+    );
+    row.append(
+      node(
+        "span",
+        "recent-icon",
+        capabilities.find((c) => c.label === kindOf(j))?.symbol || "◈",
+      ),
+      copy,
+      node("span", "status-pill " + j.status, t(j.status)),
+    );
+    root.append(row);
   }
-  setStatus("同步播放中（对比时已静音，单独播放可听声音）");
-});
-document.getElementById("resetAllBtn").addEventListener("click", () => {
-  for (const v of comparisonPlayers()) {
-    v.pause();
-    v.currentTime = 0;
-  }
-});
-
-document.getElementById("regenBtn").addEventListener("click", () => {
-  if (!selectedJob) return;
-  regenerateFromJob(selectedJob).catch((e) => {
-    setStatus(String(e));
-    generateBtn.disabled = false;
-    testGcsBtn.disabled = false;
-  });
-});
-
-document.getElementById("useForContinue").addEventListener("click", () => {
-  if (selectedJob) applySourceJob(selectedJob);
-  setMode("continue");
-  setStatus("已填入当前成片。确认编辑指令后提交 Continue edit。");
-});
-document.getElementById("useForEdit").addEventListener("click", () => {
-  if (selectedJob) applySourceJob(selectedJob);
-  setMode("edit");
-  setStatus("已填入当前成片。确认编辑指令后提交 Edit video。");
-});
-document.getElementById("useForExtend").addEventListener("click", () => {
-  if (selectedJob) applySourceJob(selectedJob);
-  setMode("extend");
-  setStatus("已填入当前成片。Duration 是这次续写的秒数，确认后提交 Extend。");
-});
-document.getElementById("useForUpscale").addEventListener("click", () => {
-  if (selectedJob) applySourceJob(selectedJob);
-  if (!activeProfile().supports_upscale) {
-    modelSelect.value = "gemini-omni-1.2-flash";
-  }
-  setMode("upscale");
-  setStatus("已填入当前成片。放大不接受文字，确认目标分辨率高于源片后提交。");
-});
-modelSelect.addEventListener("change", () => setMode(currentMode));
-customModelEl.addEventListener("change", () => setMode(currentMode));
-document.getElementById("addVideo").addEventListener("click", () => addVideoRow());
-document.getElementById("uploadVideos").addEventListener("click", () => videoPicker.click());
-videoPicker.addEventListener("change", () => {
-  const files = [...(videoPicker.files || [])];
-  for (const file of files) {
-    if (videoListEl.children.length >= 3) {
-      setStatus("参考视频最多 3 段");
-      break;
-    }
-    addVideoRow({ file });
-  }
-  videoPicker.value = "";
-});
-
-document.getElementById("addImage").addEventListener("click", () =>
-  addImageRow({ removable: true })
-);
-document.getElementById("uploadImages").addEventListener("click", () => filePicker.click());
-filePicker.addEventListener("change", async () => {
+  if (!root.children.length) root.append(node("p", "subtle", t("noTasksHelp")));
+}
+function clearStage() {
+  const v = $("player");
+  v.pause();
+  v.removeAttribute("src");
+  v.load();
+  v.hidden = true;
+  $("playbackError").hidden = true;
+}
+function rememberSelection() {
+  if (!workspace) return;
   try {
-    await handleUploadFiles(filePicker.files);
-  } catch (err) {
-    setStatus(String(err));
+    if (selectedId)
+      localStorage.setItem("omni-selected-" + workspace.workspace, selectedId);
+  } catch {}
+}
+async function selectJob(id, modal = false) {
+  const epoch = ++selectionEpoch;
+  selectedId = id;
+  rememberSelection();
+  selectedJob = null;
+  detailTab = "overview";
+  comparisonEpoch++;
+  clearStage();
+  $("workDetails").hidden = true;
+  $("stageEmpty").hidden = true;
+  $("stageState").hidden = false;
+  $("stageState").textContent = t("loading");
+  $("previewTitle").textContent = jobs.has(id)
+    ? titleOf(jobs.get(id))
+    : t("loading");
+  if (modal) showInspector();
+  try {
+    const job = await api("/api/jobs/" + id);
+    if (epoch !== selectionEpoch) return;
+    selectedJob = job;
+    jobs.set(id, { ...jobs.get(id), ...job });
+    renderPreview(job);
+  } catch (e) {
+    if (epoch === selectionEpoch) {
+      $("stageState").textContent = e.message;
+      toast(t("inspectError"));
+    }
+  }
+}
+function renderPreview(job) {
+  if (job.id !== selectedId) return;
+  selectedJob = job;
+  $("previewTitle").textContent = titleOf(job);
+  $("stageEmpty").hidden = true;
+  $("workDetails").hidden = false;
+  $("stageState").hidden = job.status === "completed" && Boolean(job.video_url);
+  const v = $("player");
+  if (!$("stageState").hidden) {
+    clearStage();
+    $("stageState").replaceChildren();
+    if (!terminal.has(job.status))
+      $("stageState").append(node("span", "spinner"));
+    $("stageState").append(
+      node("strong", "", t(job.status)),
+      node(
+        "p",
+        "",
+        terminal.has(job.status) ? job.error || job.message : t("noCancel"),
+      ),
+    );
+  } else {
+    v.hidden = false;
+    if (v.getAttribute("src") !== job.video_url) {
+      v.pause();
+      v.src = job.video_url;
+      v.load();
+    }
+  }
+  $("workStatus").textContent = t(job.status);
+  $("workStatus").className = "status-pill " + job.status;
+  $("workSpecs").textContent = [
+    job.duration_sec ? `${job.duration_sec.toFixed(1)}s` : null,
+    job.output_resolution || job.meta?.output_resolution,
+    fmtTime(job.created_at),
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  $("favorite").textContent = job.library?.favorite ? "★" : "☆";
+  $("favorite").setAttribute(
+    "aria-pressed",
+    String(Boolean(job.library?.favorite)),
+  );
+  $("downloadVideo").hidden = job.status !== "completed" || !job.video_url;
+  $("downloadVideo").href = `/api/jobs/${job.id}/download`;
+  $("downloadVideo").download = `omni-${job.id}.mp4`;
+  $("exportJob").href = `/api/jobs/${job.id}/export`;
+  const actions = $("nextActions");
+  actions.replaceChildren();
+  if (job.status === "completed" && job.video_uri) {
+    for (const id of ["continue", "edit", "extend", "upscale"]) {
+      const c = capabilities.find((c) => c.id === id);
+      const b = button(t(c.label), () => useWork(job, id), "");
+      const p =
+        catalog.find((p) => p.id === (job.model || job.meta?.model)) ||
+        profile();
+      let reason = "";
+      const limit =
+        id === "upscale"
+          ? p.upscale_max
+          : id === "extend"
+            ? p.extend_input_max
+            : p.edit_max;
+      if (id === "upscale" && !p.supports_upscale) reason = t("notSupported");
+      else if (limit != null && job.duration_sec > limit + 0.05)
+        reason = t("sourceTooLong");
+      else if (
+        id === "upscale" &&
+        upscaleTargets[job.output_resolution || job.meta?.output_resolution]
+          ?.length === 0
+      )
+        reason = t("noUpscale");
+      b.disabled = Boolean(reason);
+      b.title = reason;
+      actions.append(b);
+    }
+  }
+  if (job.request && Object.keys(job.request).length)
+    actions.append(
+      button(t("restoreSettings"), () => restoreSettings(job), ""),
+    );
+  if (job.status === "interrupted" && job.interaction_id)
+    actions.append(button(t("recover"), () => recoverJob(job), ""));
+  $("trashWork").disabled = !terminal.has(job.status);
+  renderDetail(job);
+}
+// The parameters this task was submitted with, limited to what its function takes.
+function settingsOf(job) {
+  const r = job.request || {};
+  const mode = r.mode || job.mode;
+  const parts = [];
+  if (["generate", "extend"].includes(mode) && r.duration)
+    parts.push((mode === "extend" ? "+" : "") + r.duration + "s");
+  if (mode !== "extend" && (r.resolution || job.output_resolution))
+    parts.push(r.resolution || job.output_resolution);
+  if (mode === "generate" && r.aspect_ratio) parts.push(r.aspect_ratio);
+  if (r.seed != null) parts.push("seed " + r.seed);
+  for (const [k, v] of Object.entries(r.labels || {})) parts.push(`${k}=${v}`);
+  return parts.join(" · ") || "—";
+}
+function detailHeading(root, key, text) {
+  root.append(node("h3", "", t(key)), node("pre", "", text || "—"));
+}
+function renderDetail(job) {
+  document
+    .querySelectorAll("[data-detail]")
+    .forEach((b) =>
+      b.classList.toggle("active", b.dataset.detail === detailTab),
+    );
+  const root = $("detailContent");
+  root.replaceChildren();
+  if (detailTab === "overview") {
+    const dl = node("dl");
+    for (const [k, v] of [
+      ["model", job.model || job.meta?.model],
+      ["created", fmtTime(job.created_at)],
+      [
+        "source",
+        (jobs.has(job.source_job_id) && titleOf(jobs.get(job.source_job_id))) ||
+          job.source_video_uri ||
+          job.source_job_id ||
+          "—",
+      ],
+      ["settings", settingsOf(job)],
+      ["collection", job.library?.collection || "—"],
+    ])
+      dl.append(node("dt", "", t(k)), node("dd", "", v));
+    root.append(dl);
+    if (job.library?.notes) detailHeading(root, "notes", job.library.notes);
+    detailHeading(
+      root,
+      "originalPrompt",
+      job.request?.prompt || job.meta?.prompt_original || job.shot_list,
+    );
+    if (job.error) detailHeading(root, "needsAttention", job.error);
+  } else if (detailTab === "inputs") {
+    detailHeading(
+      root,
+      "originalPrompt",
+      job.request?.prompt || job.meta?.prompt_original || job.shot_list,
+    );
+    const images = job.meta?.gcs_ref_items || [],
+      videos = job.meta?.gcs_video_items || [];
+    const source = jobs.get(job.source_job_id);
+    if (source) {
+      root.append(node("h3", "", t("sourceWork")));
+      const open = button(
+        "",
+        () => selectJob(source.id, $("inspector").open),
+        "version-row",
+      );
+      open.append(
+        node("span", "", titleOf(source)),
+        node(
+          "small",
+          "",
+          source.duration_sec ? `${source.duration_sec.toFixed(1)}s` : "",
+        ),
+        node("span", "", "↗"),
+      );
+      root.append(open);
+    } else if (job.source_video_uri)
+      detailHeading(root, "sourceWork", job.source_video_uri);
+    if (!images.length && !videos.length && !source && !job.source_video_uri)
+      root.append(node("p", "subtle", t("noInputs")));
+    const grid = node("div", "input-grid");
+    for (const [kind, items] of [
+      ["images", images],
+      ["videos", videos],
+    ])
+      items.forEach((item, i) => {
+        const figure = node("figure", "input-figure");
+        const src = `/api/jobs/${job.id}/assets/${kind}/${i}`;
+        const media = node(kind === "images" ? "img" : "video");
+        media.src = src;
+        const label = `${t(kind === "images" ? "images" : "videoRefs")} ${i + 1}`;
+        if (kind === "images") {
+          media.alt = label;
+          media.loading = "lazy";
+          const link = node("a");
+          link.href = src;
+          link.target = "_blank";
+          link.rel = "noopener";
+          link.append(media);
+          figure.append(link);
+        } else {
+          media.controls = true;
+          media.preload = "metadata";
+          figure.append(media);
+        }
+        figure.append(node("figcaption", "subtle", label));
+        grid.append(figure);
+      });
+    if (grid.children.length) root.append(grid);
+    detailHeading(root, "sentPrompt", job.meta?.final_prompt_preview);
+  } else if (detailTab === "technical") {
+    detailHeading(root, "sentPrompt", job.meta?.final_prompt_preview);
+    detailHeading(root, "technical", JSON.stringify(job, null, 2));
+    const list = node("ol", "timeline");
+    for (const event of job.events || []) {
+      const li = node("li");
+      li.append(
+        node("time", "", fmtTime(event.at)),
+        node("span", "", `${t(event.status)} · ${event.message}`),
+      );
+      list.append(li);
+    }
+    root.append(list);
+  } else renderVersions(job, root);
+}
+async function renderVersions(job, root) {
+  const epoch = ++comparisonEpoch;
+  root.textContent = t("versionsLoading");
+  try {
+    const data = await api(`/api/jobs/${job.id}/lineage`);
+    if (
+      epoch !== comparisonEpoch ||
+      selectedId !== job.id ||
+      detailTab !== "versions"
+    )
+      return;
+    root.replaceChildren();
+    if (data.clips.length < 2)
+      root.append(node("p", "subtle", t("noVersions")));
+    for (const clip of data.clips) {
+      const row = button(
+        "",
+        () => selectJob(clip.job_id, $("inspector").open),
+        "version-row" + (clip.job_id === job.id ? " active" : ""),
+      );
+      row.append(
+        node(
+          "span",
+          "",
+          `${t(capabilities.find((c) => c.id === (clip.generate_task || clip.mode))?.label || clip.mode)} · ${fmtTime(clip.created_at)}`,
+        ),
+        node("small", "", `${clip.duration_sec || "—"}s`),
+        node("span", "", "↗"),
+      );
+      root.append(row);
+    }
+    if (data.clips.length >= 2) {
+      const pair = node("div", "parameter-grid");
+      pair.style.gridTemplateColumns = "1fr 1fr";
+      const prev =
+        data.clips.find((c) => c.job_id === job.source_job_id) || data.clips[0];
+      const curr =
+        data.clips.find((c) => c.job_id === job.id) || data.clips.at(-1);
+      for (const c of [prev, curr]) {
+        const vid = node("video");
+        vid.controls = true;
+        vid.muted = true;
+        vid.playsInline = true;
+        vid.preload = "metadata";
+        vid.src = c.video_url;
+        vid.style.width = "100%";
+        vid.style.maxHeight = "180px";
+        pair.append(vid);
+      }
+      const controls = node("div", "work-tools");
+      root.append(pair, controls);
+      controls.append(
+        button(
+          t("playCompare"),
+          () => {
+            $("player").pause();
+            pair.querySelectorAll("video").forEach((v) => {
+              v.currentTime = 0;
+              v.play().catch(() => toast(t("playbackError")));
+            });
+          },
+          "text-button",
+        ),
+        button(
+          t("stopCompare"),
+          () => pair.querySelectorAll("video").forEach((v) => v.pause()),
+          "text-button",
+        ),
+      );
+    }
+  } catch (e) {
+    if (epoch === comparisonEpoch) root.textContent = e.message;
+  }
+}
+function useWork(job, id) {
+  saveDraft();
+  const chosen = job.model || job.meta?.model;
+  if (chosen) {
+    if ([...$("model").options].some((o) => o.value === chosen))
+      $("model").value = chosen;
+    else {
+      $("model").value = "custom";
+      $("customModel").value = chosen;
+    }
+  }
+  capId = id;
+  const d = draft();
+  d.sourceId = job.id;
+  d.sourceUri = "";
+  d.sourceAsset = null;
+  if (id === "upscale")
+    d.resolution =
+      (upscaleTargets[job.output_resolution || job.meta?.output_resolution] || [
+        "1080p",
+      ])[0] || "";
+  if ($("inspector").open) $("inspector").close();
+  view = "studio";
+  renderForm();
+  showView("studio");
+  persist();
+  toast(t("sourceSelected"));
+  $("sourceSection").scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+function restoreSettings(job) {
+  saveDraft();
+  const req = job.request || {};
+  capId =
+    req.mode === "generate"
+      ? req.generate_task || "text_to_video"
+      : req.mode || job.mode;
+  if (!capabilities.some((c) => c.id === capId)) capId = "text_to_video";
+  const d = {
+    ...defaultDraft(),
+    prompt: req.prompt || job.meta?.prompt_original || "",
+    duration: req.duration || 8,
+    resolution: req.resolution || "720p",
+    aspect: req.aspect_ratio || "16:9",
+    seed: req.seed ?? "",
+    labels: Object.entries(req.labels || {})
+      .map(([k, v]) => `${k}=${v}`)
+      .join(", "),
+    sourceId: job.source_job_id || "",
+    sourceUri: req.source_video_uri || "",
+    stateful: req.stateful !== false,
+    enhance: req.enhance_prompt || false,
+    images: (job.meta?.gcs_ref_items || []).map((x) => ({
+      ...x,
+      name: x.uri.split("/").at(-1),
+    })),
+    videos: (job.meta?.gcs_video_items || []).map((x) => ({
+      ...x,
+      name: x.uri.split("/").at(-1),
+    })),
+  };
+  if (!d.images.length)
+    d.images = (req.reference_images || [])
+      .filter((x) => x.url || x.uri)
+      .map((x) => ({ ...x, name: x.url || x.uri }));
+  if (!d.videos.length)
+    d.videos = (req.reference_videos || []).filter((x) => x.uri);
+  drafts[capId] = d;
+  const model = req.model || job.model || "gemini-omni-1.2-flash";
+  if ([...$("model").options].some((o) => o.value === model))
+    $("model").value = model;
+  else {
+    $("model").value = "custom";
+    $("customModel").value = model;
+  }
+  if ($("inspector").open) $("inspector").close();
+  renderForm();
+  showView("studio");
+  persist();
+  toast(t("copiedSettings"));
+}
+// Changes to one work are sent one after another, each on top of the latest
+// saved version, so quick consecutive clicks all land.
+const librarySaves = new Map();
+function updateLibrary(job, changes) {
+  const save = (librarySaves.get(job.id) || Promise.resolve())
+    .catch(() => {})
+    .then(() => saveLibrary(job, changes));
+  librarySaves.set(job.id, save);
+  return save;
+}
+async function saveLibrary(job, changes) {
+  const known = [jobs.get(job.id), selectedJob?.id === job.id && selectedJob, job]
+    .filter(Boolean)
+    .map((j) => j.library?.version || 0);
+  const updated = await api(
+    "/api/jobs/" + job.id,
+    jsonOptions("PATCH", { version: Math.max(...known), ...changes }),
+  );
+  jobs.set(job.id, updated);
+  if (selectedId === job.id) renderPreview(updated);
+  renderRecent();
+  if (view === "library") renderLibrary();
+  if (view === "tasks") renderTasks();
+  toast(t("saved"));
+  return updated;
+}
+async function recoverJob(job) {
+  try {
+    await api(`/api/jobs/${job.id}/recover`, { method: "POST" });
+    await selectJob(job.id, $("inspector").open);
+    await refreshJobs();
+  } catch (e) {
+    toast(e.message);
+  }
+}
+function openManage() {
+  if (!selectedJob) return;
+  const l = selectedJob.library || {};
+  $("workTitle").value = l.title || titleOf(selectedJob);
+  $("workCollection").value = l.collection || "";
+  $("workNotes").value = l.notes || "";
+  $("archiveWork").textContent = t(l.archived ? "unarchive" : "archive");
+  $("trashWork").textContent = t(l.trashed ? "restore" : "moveTrash");
+  $("manageError").hidden = true;
+  $("manageDialog").showModal();
+}
+async function manage(changes) {
+  if (!selectedJob) return;
+  const controls = [...$("manageForm").querySelectorAll("button")];
+  for (const c of controls) c.disabled = true;
+  try {
+    await updateLibrary(selectedJob, changes);
+    $("manageDialog").close();
+  } catch (e) {
+    $("manageError").textContent = e.message;
+    $("manageError").hidden = false;
+    if (e.status === 409) {
+      const fresh = await api("/api/jobs/" + selectedJob.id).catch(() => null);
+      if (fresh) {
+        selectedJob = fresh;
+        jobs.set(fresh.id, fresh);
+      }
+    }
   } finally {
-    filePicker.value = "";
+    for (const c of controls) c.disabled = false;
+    $("trashWork").disabled = !terminal.has(selectedJob.status);
+  }
+}
+async function refreshJobs() {
+  if (listBusy || !workspace) return;
+  listBusy = true;
+  try {
+    const data = await api("/api/jobs");
+    $("connectionBanner").hidden = data.storage_ok !== false;
+    $("connectionBanner").textContent = t("storageWarning");
+    const next = new Map();
+    for (const row of data.jobs || []) {
+      const old = jobs.get(row.id);
+      next.set(row.id, row);
+      if (old && !terminal.has(old.status) && terminal.has(row.status))
+        toast(
+          `${t(row.status === "completed" ? "finished" : "taskFailed")} · ${titleOf(row)}`,
+        );
+    }
+    jobs = next;
+    const signature = JSON.stringify(data.jobs);
+    const changed = signature !== listSignature;
+    listSignature = signature;
+    const n = [...jobs.values()].filter((j) => !terminal.has(j.status)).length;
+    $("activeCount").textContent = n;
+    $("activeCount").hidden = !n;
+    if (changed) {
+      renderRecent();
+      renderSourceOptions();
+      renderCollections();
+      if (view === "library") renderLibrary();
+      if (view === "tasks") renderTasks();
+      const summary = jobs.get(selectedId);
+      if (
+        selectedJob &&
+        summary &&
+        (summary.updated_at !== selectedJob.updated_at ||
+          JSON.stringify(summary.library) !==
+            JSON.stringify(selectedJob.library))
+      ) {
+        const id = selectedId,
+          epoch = selectionEpoch;
+        const detail = await api("/api/jobs/" + id);
+        if (epoch === selectionEpoch && id === selectedId)
+          renderPreview(detail);
+      }
+    }
+  } catch (e) {
+    $("connectionBanner").textContent = e.status ? e.message : t("offline");
+    $("connectionBanner").hidden = false;
+  } finally {
+    listBusy = false;
+  }
+}
+async function upload(item) {
+  if (item.missing) throw new Error(t("fileReattach"));
+  if (item.uri) return { uri: item.uri, mime_type: item.mime_type };
+  if (item.url)
+    return { url: item.url, mime_type: item.mime_type || "image/jpeg" };
+  if (!item.file) throw new Error(t("needImages"));
+  const data = new FormData();
+  data.append("file", item.file);
+  const result = await api("/api/assets", {
+    method: "POST",
+    body: data,
+    timeout: 120000,
+  });
+  Object.assign(item, result);
+  return { uri: result.uri, mime_type: result.mime_type };
+}
+function parseLabels(value) {
+  const result = {};
+  for (const pair of value
+    .split(",")
+    .map((x) => x.trim())
+    .filter(Boolean)) {
+    const i = pair.indexOf("=");
+    if (i < 1) throw new Error(t("invalidLabels"));
+    const k = pair.slice(0, i).trim(),
+      v = pair.slice(i + 1).trim();
+    if (!/^[a-z][a-z0-9_-]{0,62}$/.test(k) || !/^[a-z0-9_-]{0,63}$/.test(v))
+      throw new Error(t("invalidLabels"));
+    result[k] = v;
+  }
+  return result;
+}
+async function submit() {
+  if (submitting) return;
+  error("");
+  saveDraft();
+  const c = { ...currentCap() },
+    d = {
+      ...draft(),
+      images: [...draft().images],
+      videos: [...draft().videos],
+    },
+    p = { ...profile() },
+    model = modelId();
+  try {
+    if (!model) throw new Error("Enter a model ID.");
+    if (c.id !== "upscale" && !d.prompt.trim())
+      throw new Error(t("needPrompt"));
+    if (c.id === "upscale" && !p.supports_upscale)
+      throw new Error(t("notSupported"));
+    if (c.mode !== "generate" && !d.sourceId && !d.sourceUri && !d.sourceAsset)
+      throw new Error(t("needSource"));
+    if (d.sourceUri && !d.sourceUri.startsWith("gs://"))
+      throw new Error(t("needSource"));
+    const imageCount = imageLimit(c, p);
+    if (d.images.length > imageCount && imageCount > 0)
+      throw new Error(t("tooMany"));
+    if (
+      (c.images === 1 && d.images.length !== 1) ||
+      (c.id === "frames_to_video" && d.images.length !== 2) ||
+      (c.id === "reference_to_video" && !d.images.length && !d.videos.length)
+    )
+      throw new Error(t("needImages"));
+    const source = jobs.get(d.sourceId);
+    const limit = ["edit", "continue"].includes(c.mode)
+      ? p.edit_max
+      : c.mode === "upscale"
+        ? p.upscale_max
+        : c.mode === "extend"
+          ? p.extend_input_max
+          : null;
+    if (
+      !d.sourceUri &&
+      !d.sourceAsset &&
+      source &&
+      limit != null &&
+      source.duration_sec > limit + 0.05
+    )
+      throw new Error(t("sourceTooLong"));
+    if (c.id === "upscale" && !d.resolution) throw new Error(t("noUpscale"));
+    const seed = d.seed === "" ? null : Number(d.seed);
+    if (
+      p.supports_seed &&
+      seed !== null &&
+      (!Number.isInteger(seed) || seed < 0 || seed > 4294967295)
+    )
+      throw new Error(t("invalidSeed"));
+    const labels = p.supports_labels ? parseLabels(d.labels) : {};
+    submitting = true;
+    $("generate").disabled = true;
+    $("generate").textContent = t("uploading");
+    const body = {
+      prompt: c.id === "upscale" ? "" : d.prompt.trim(),
+      mode: c.mode,
+      generate_task: c.mode === "generate" ? c.id : null,
+      duration: d.duration || 8,
+      resolution: d.resolution || "720p",
+      aspect_ratio: d.aspect,
+      model,
+      seed: p.supports_seed ? seed : null,
+      labels,
+      stateful: p.supports_multiturn && d.stateful,
+      enhance_prompt: ["generate", "extend"].includes(c.mode) && d.enhance,
+      reference_images: [],
+      reference_videos: [],
+      source_job_id: c.mode === "generate" ? null : d.sourceId || null,
+      source_video_uri: c.mode === "generate" ? null : d.sourceUri || null,
+    };
+    if (imageCount > 0) {
+      for (const item of d.images)
+        body.reference_images.push(await upload(item));
+    }
+    if (c.id === "reference_to_video") {
+      for (const item of d.videos)
+        body.reference_videos.push(await upload(item));
+    }
+    if (c.mode !== "generate" && d.sourceAsset) {
+      const result = await upload(d.sourceAsset);
+      body.source_video_uri = result.uri;
+      body.source_job_id = null;
+    }
+    persist();
+    const signature = JSON.stringify(body);
+    if (!lastAttempt || lastAttempt.signature !== signature) {
+      lastAttempt = {
+        signature,
+        body: { ...body, request_id: crypto.randomUUID() },
+      };
+      localStorage.setItem(
+        "omni-pending-" + workspace.workspace,
+        JSON.stringify(lastAttempt),
+      );
+    }
+    await sendAttempt(lastAttempt);
+  } catch (e) {
+    error(e.message);
+  } finally {
+    submitting = false;
+    $("generate").disabled = false;
+    $("generate").replaceChildren(
+      node(
+        "span",
+        "",
+        t(currentCap().mode === "generate" ? "generate" : currentCap().label),
+      ),
+      node("span", "", "↗"),
+    );
+  }
+}
+async function sendAttempt(attempt) {
+  const epoch = selectionEpoch,
+    currentView = view;
+  submitting = true;
+  $("generate").disabled = true;
+  try {
+    const job = await api("/api/generate", jsonOptions("POST", attempt.body));
+    lastAttempt = null;
+    localStorage.removeItem("omni-pending-" + workspace.workspace);
+    error("");
+    jobs.set(job.id, job);
+    toast(t("submitted"));
+    await refreshJobs();
+    if (epoch === selectionEpoch && currentView === view && view === "studio") {
+      selectedId = job.id;
+      rememberSelection();
+      selectionEpoch++;
+      selectedJob = job;
+      detailTab = "overview";
+      renderPreview(job);
+    }
+  } catch (e) {
+    if (e.status && e.status < 500) {
+      lastAttempt = null;
+      localStorage.removeItem("omni-pending-" + workspace.workspace);
+      error(e.message);
+    } else offerRetry(attempt);
+  } finally {
+    submitting = false;
+    $("generate").disabled = false;
+  }
+}
+// A page closed mid-submit comes back with the attempt still on file. If the
+// task did start, there is nothing left to decide.
+async function settlePending() {
+  if (!lastAttempt) return;
+  try {
+    const job = await api(
+      "/api/submissions/" + lastAttempt.body.request_id,
+    );
+    lastAttempt = null;
+    localStorage.removeItem("omni-pending-" + workspace.workspace);
+    jobs.set(job.id, { ...jobs.get(job.id), ...job });
+    renderForm();
+    renderRecent();
+  } catch {}
+}
+async function loadExample() {
+  try {
+    examples ||= await api("/api/examples");
+    const c = currentCap(),
+      d = readForm();
+    if (c.mode === "generate") {
+      const options = examples.generate[c.id] || [];
+      const example = options[(d.exampleIndex || 0) % options.length];
+      if (!example) return;
+      d.exampleIndex = (d.exampleIndex || 0) + 1;
+      d.prompt = example.prompt;
+      d.duration = example.duration || 8;
+      d.aspect = example.aspect_ratio || "16:9";
+      d.images.forEach(releaseMedia);
+      d.images = (example.image_urls || []).map((url) => ({
+        url,
+        name: url.split("/").at(-1),
+        mime_type: "image/jpeg",
+      }));
+    } else {
+      const options = examples[c.mode] || [];
+      d.prompt = options[(d.exampleIndex || 0) % options.length] || "";
+      d.exampleIndex = (d.exampleIndex || 0) + 1;
+    }
+    renderForm();
+    persist();
+  } catch (e) {
+    error(e.message);
+  }
+}
+function renderReference() {
+  const root = $("referenceGrid");
+  root.replaceChildren();
+  for (const c of capabilities) {
+    const card = node("article", "reference-card");
+    card.append(
+      node("span", "symbol", c.symbol),
+      node("h2", "", t(c.label)),
+      node("p", "", t(c.help)),
+    );
+    const a = node("a", "", t("officialGuide"));
+    a.href = docBase + c.doc;
+    a.target = "_blank";
+    a.rel = "noopener";
+    card.append(
+      a,
+      button(
+        t("tryCapability"),
+        () => {
+          switchCapability(c.id);
+          showView("studio");
+        },
+        "secondary",
+      ),
+    );
+    root.append(card);
+  }
+  renderLimits();
+}
+// The numbers the studio enforces, straight from the model profiles.
+function renderLimits() {
+  const table = $("limits");
+  table.replaceChildren();
+  if (!catalog.length) return;
+  const sec = (n) => `${n} s`;
+  const yes = (v) => (v ? "✓" : "—");
+  const rows = [
+    ["limitGenerate", (p) => `${p.generate_min}–${p.generate_max} s`],
+    ["limitFrames", (p) => `${p.generate_min}–${p.frames_max} s`],
+    ["limitEdit", (p) => "≤ " + sec(p.edit_max)],
+    ["limitExtendAdd", (p) => `${p.extend_min}–${p.extend_max} s`],
+    ["limitUpscale", (p) => (p.upscale_max == null ? "—" : "≤ " + sec(p.upscale_max))],
+    ["limitRefImages", (p) => `≤ ${p.reference_images_max}`],
+    ["limitRefClips", (p) => `≤ ${p.reference_videos_max}`],
+    [
+      "limitEditImages",
+      (p) =>
+        p.edit_reference_images_max ? `≤ ${p.edit_reference_images_max}` : "—",
+    ],
+    ["limitMultiturn", (p) => yes(p.supports_multiturn)],
+    ["limitSeed", (p) => yes(p.supports_seed)],
+    ["limitLabels", (p) => yes(p.supports_labels)],
+    ["resolution", (p) => p.resolutions.join(" · ")],
+    ["aspect", (p) => p.aspect_ratios.join(" · ")],
+  ];
+  const head = node("tr");
+  head.append(node("th", "", ""));
+  for (const p of catalog) {
+    const th = node("th", "", `${p.label} · ${p.stage}`);
+    th.append(node("code", "", p.id));
+    head.append(th);
+  }
+  const thead = node("thead"),
+    tbody = node("tbody");
+  thead.append(head);
+  for (const [key, value] of rows) {
+    const tr = node("tr");
+    tr.append(node("th", "", t(key)));
+    for (const p of catalog) tr.append(node("td", "", value(p)));
+    tbody.append(tr);
+  }
+  table.append(thead, tbody);
+}
+function changeLanguage() {
+  language = $("language").value;
+  try {
+    localStorage.setItem("omni-language", language);
+  } catch {}
+  translatePage();
+  renderForm();
+  renderRecent();
+  renderLibrary();
+  renderTasks();
+  renderReference();
+  if (selectedJob) renderPreview(selectedJob);
+  renderWorkspace();
+}
+function renderWorkspace() {
+  $("workspaceInfo").textContent = workspace
+    ? `${t(workspace.storage === "cloud" ? "cloud" : "local")} · ${workspace.workspace} · v${workspace.version}`
+    : t("loading");
+}
+$("generate").addEventListener("click", submit);
+$("exampleButton").addEventListener("click", loadExample);
+$("language").value = language;
+$("language").addEventListener("change", changeLanguage);
+$("settingsButton").addEventListener("click", () => {
+  renderWorkspace();
+  $("settingsDialog").showModal();
+});
+$("closeInspector").addEventListener("click", () => $("inspector").close());
+$("closeManage").addEventListener("click", () => $("manageDialog").close());
+$("manageWork").addEventListener("click", openManage);
+$("manageForm").addEventListener("submit", (e) => {
+  e.preventDefault();
+  manage({
+    title: $("workTitle").value.trim(),
+    collection: $("workCollection").value.trim(),
+    notes: $("workNotes").value,
+  });
+});
+$("archiveWork").addEventListener("click", () =>
+  manage({ archived: !selectedJob?.library?.archived }),
+);
+$("trashWork").addEventListener("click", () =>
+  manage({ trashed: !selectedJob?.library?.trashed }),
+);
+$("favorite").addEventListener("click", () => {
+  if (selectedJob)
+    updateLibrary(selectedJob, {
+      favorite: !selectedJob.library?.favorite,
+    }).catch((e) => toast(e.message));
+});
+$("player").addEventListener("error", () => {
+  $("playbackError").hidden = !$("player").getAttribute("src");
+});
+$("retryPlayback").addEventListener("click", () => {
+  if (selectedJob?.video_url) {
+    $("player").src = selectedJob.video_url + "?reload=" + Date.now();
+    $("player").load();
+    $("playbackError").hidden = true;
   }
 });
-document.getElementById("loadExample").addEventListener("click", () => {
-  loadExample().catch((e) => setStatus(String(e)));
-});
-generateBtn.addEventListener("click", () => {
-  submitJob().catch((e) => {
-    setStatus(String(e));
-    generateBtn.disabled = false;
-    testGcsBtn.disabled = false;
+$("player").addEventListener("play", () => {
+  document.querySelectorAll("video").forEach((v) => {
+    if (v !== $("player")) v.pause();
   });
 });
-testGcsBtn.addEventListener("click", () => {
-  testGcsUpload().catch((e) => {
-    setStatus(String(e));
-    testGcsBtn.disabled = false;
-    generateBtn.disabled = false;
+$("allTasks").addEventListener("click", () => showView("tasks"));
+$("refreshTasks").addEventListener("click", async () => {
+  await refreshJobs();
+  if (selectedId) await selectJob(selectedId, $("inspector").open);
+});
+for (const b of document.querySelectorAll("[data-view]"))
+  b.addEventListener("click", () => showView(b.dataset.view));
+for (const b of document.querySelectorAll('[data-action="new"]'))
+  b.addEventListener("click", () => showView("studio"));
+for (const b of document.querySelectorAll("[data-detail]"))
+  b.addEventListener("click", () => {
+    detailTab = b.dataset.detail;
+    comparisonEpoch++;
+    document.querySelectorAll("#detailContent video").forEach((v) => v.pause());
+    if (selectedJob) renderDetail(selectedJob);
   });
+for (const id of ["librarySearch", "libraryFilter", "collectionFilter"])
+  $(id).addEventListener("input", () => {
+    showLimit = 24;
+    renderLibrary();
+  });
+for (const id of ["taskSearch", "taskFilter"])
+  $(id).addEventListener("input", renderTasks);
+$("moreWorks").addEventListener("click", () => {
+  showLimit += 24;
+  renderLibrary();
 });
-
-promptEl.addEventListener("paste", () => {
-  setTimeout(() => {
-    if (currentMode === "generate") autoFillFromPrompt({ silent: false });
-  }, 0);
+for (const id of [
+  "prompt",
+  "duration",
+  "resolution",
+  "aspect",
+  "sourceUri",
+  "seed",
+  "labels",
+  "stateful",
+  "enhance",
+])
+  $(id).addEventListener("input", () => {
+    saveDraft();
+    if (id === "sourceUri") {
+      draft().sourceId = "";
+      draft().sourceAsset = null;
+      renderSourceOptions();
+      persist();
+    }
+  });
+$("sourceJob").addEventListener("change", () => {
+  saveDraft();
+  draft().sourceUri = "";
+  draft().sourceAsset = null;
+  renderForm();
+  persist();
 });
-promptEl.addEventListener("input", scheduleAutoParse);
-promptEl.addEventListener("blur", () => {
-  if (currentMode === "generate") autoFillFromPrompt({ silent: true });
+for (const id of ["model", "customModel"])
+  $(id).addEventListener("change", () => {
+    saveDraft();
+    renderForm();
+    persist();
+  });
+$("imageFiles").addEventListener("change", (e) => {
+  addFiles("images", [...e.target.files]);
+  e.target.value = "";
 });
-
-setMode("generate");
-setGenTask("text_to_video");
-loadHealth();
-ensureExamples().catch((err) => setStatus(String(err)));
-refreshJobList().catch(() => {});
+$("videoFiles").addEventListener("change", (e) => {
+  addFiles("videos", [...e.target.files]);
+  e.target.value = "";
+});
+$("sourceFile").addEventListener("change", (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  if (file.size > 20 * 1024 * 1024) {
+    error(t("fileLimit"));
+    return;
+  }
+  saveDraft();
+  draft().sourceAsset = { file, name: file.name, mime_type: file.type };
+  draft().sourceId = "";
+  draft().sourceUri = "";
+  e.target.value = "";
+  renderForm();
+  persist();
+});
+$("addImageUrl").addEventListener("click", () => {
+  const url = window.prompt(t("imageUrl"), "");
+  if (!url) return;
+  try {
+    const parsed = new URL(url);
+    if (!["https:", "http:"].includes(parsed.protocol))
+      throw new Error("Use an HTTP or HTTPS image URL.");
+    saveDraft();
+    if (draft().images.length >= imageLimit()) throw new Error(t("tooMany"));
+    draft().images.push({
+      url,
+      name: url.split("/").at(-1),
+      mime_type: "image/jpeg",
+    });
+    renderAttachments();
+    persist();
+  } catch (e) {
+    error(e.message);
+  }
+});
+$("addVideoUri").addEventListener("click", () => {
+  const uri = window.prompt(t("videoUri"), "");
+  if (!uri) return;
+  if (!uri.startsWith("gs://")) {
+    error(t("videoUri"));
+    return;
+  }
+  saveDraft();
+  if (draft().videos.length >= profile().reference_videos_max) {
+    error(t("tooMany"));
+    return;
+  }
+  draft().videos.push({
+    uri,
+    name: uri.split("/").at(-1),
+    mime_type: "video/mp4",
+  });
+  renderAttachments();
+  persist();
+});
+$("restoreWorkspace").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  try {
+    const data = JSON.parse(await file.text());
+    if (
+      data.format !== "omni-workspace-v1" ||
+      !/^[a-f0-9]{64}$/.test(data.recovery_key || "")
+    )
+      throw new Error(t("invalidRecovery"));
+    if (!confirm(t("restoreConfirm"))) return;
+    saveDraft();
+    await api(
+      "/api/workspace",
+      jsonOptions("POST", { recovery_key: data.recovery_key }),
+    );
+    location.reload();
+  } catch (err) {
+    $("settingsStatus").textContent = err.message;
+  } finally {
+    e.target.value = "";
+  }
+});
+window.addEventListener("hashchange", () => {
+  const next = location.hash.slice(1);
+  if (["studio", "library", "tasks"].includes(next) && next !== view)
+    showView(next);
+});
+window.addEventListener("online", refreshJobs);
+window.addEventListener("storage", (e) => {
+  if (e.key === "omni-language") return;
+  refreshJobs();
+});
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) refreshJobs();
+});
+window.addEventListener("pagehide", () => {
+  if (booted) saveDraft();
+});
+async function poll() {
+  await refreshJobs();
+  setTimeout(
+    poll,
+    [...jobs.values()].some((j) => !terminal.has(j.status)) ? 3000 : 10000,
+  );
+}
+async function boot() {
+  translatePage();
+  showView(view);
+  try {
+    workspace = await api("/api/workspace");
+    const health = await api("/api/health");
+    catalog = health.models || [];
+    restoreDrafts();
+    renderForm();
+    renderWorkspace();
+    renderReference();
+    booted = true;
+    await refreshJobs();
+    await settlePending();
+    renderRecent();
+    let last = null;
+    try {
+      last = localStorage.getItem("omni-selected-" + workspace.workspace);
+    } catch {}
+    if (last && jobs.has(last) && !jobs.get(last).library?.trashed)
+      selectJob(last, false);
+    if (view === "library") renderLibrary();
+    if (view === "tasks") renderTasks();
+    poll();
+  } catch (e) {
+    $("connectionBanner").hidden = false;
+    $("connectionBanner").textContent = e.message;
+    renderForm();
+  }
+}
+boot();

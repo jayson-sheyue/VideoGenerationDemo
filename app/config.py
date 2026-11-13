@@ -55,6 +55,12 @@ class Settings(BaseSettings):
     poll_timeout_sec: float = 900.0
     image_download_timeout_sec: float = 90.0
     signed_url_ttl_minutes: int = 120
+    workspace_store_uri: str = ""
+    # Generations in flight across the whole deployment. The single instance
+    # mostly waits on polling, so this only stops a runaway burst.
+    max_active_jobs: int = 8
+    max_workspace_jobs: int = 500
+    app_version: str = "0.3.0"
 
 
 settings = Settings()

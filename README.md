@@ -4,7 +4,7 @@
 
 Local / Cloud Run lab for **Gemini Omni Flash**. The default model is GA **Omni 1.2 Flash** (`gemini-omni-1.2-flash`). The UI can switch to **1.1 Flash Preview** (`gemini-omni-1.1-flash-preview`) or accept a custom model id. Write a shot list, attach reference images or videos, and call the Google Cloud **Agent Platform Interactions API** for generate, multi-turn edit, extend, and upscale.
 
-Model limits and prompt patterns: [learning_guide.md](./learning_guide.md) (Chinese). In-product official-doc hub: `/docs` while the server is running. This README covers how to run, deploy, and call this repo.
+Model limits and prompt patterns: [learning_guide.md](./learning_guide.md) (Chinese). The in-product **API guide** tab (also at `/docs`) lists every capability, the limits by model, and the official pages. This README covers how to run, deploy, and call this repo.
 
 ## What it can do
 
@@ -68,13 +68,16 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Open http://127.0.0.1:8000 . Generation is usually 1–3+ minutes; the UI polls `/api/jobs/{id}`.
+Open http://127.0.0.1:8000 . Generation is usually 1–3+ minutes and runs in the background; the page keeps polling `/api/jobs`.
 
-## UI notes for demos
+## Studio, portfolio, and task history
 
-- Modes keep their own prompt, duration, resolution, and reference-image list so out-of-order walks (Generate → Upscale → Edit → Extend) stay valid.
-- Edit / Continue / Extend only upload optional reference images when the instruction cites `@图片N`.
-- Switching to **Extend** shows the active model’s input rule (any-length on 1.2 vs ≤30s on 1.1).
+- **Studio**: eight functions (text, first frame, first + last, references, edit, continue edit, extend, upscale). Each shows only its own controls and keeps its own draft, so a walk like Generate → Upscale → Edit → Extend stays valid. Drafts and the open work come back after a refresh.
+- **Preview**: every finished clip offers Continue edit / Edit / Extend / Upscale with that clip as the source, plus **Use these settings** to load a task's inputs back into the studio. Tabs show the inputs, the exact prompt and request sent, the task timeline, and the versions derived from the same original with side-by-side playback.
+- **Portfolio**: finished clips with title, collection, notes, favorite, archive, and a reversible trash; search and filters.
+- **Tasks**: the full history with status filters. Opening a task shows the same preview in a dialog without touching the studio draft.
+- **Workspace**: history belongs to a browser workspace (an http-only cookie). *Workspace → Export recovery file* opens the same workspace on another device. Task records and portfolio metadata are stored under `OUTPUT_GCS_URI/workspaces/` (override with `WORKSPACE_STORE_URI`); without a bucket they are JSON files under `outputs/workspaces/`. After a restart, a task that already has an interaction id resumes by polling that id; nothing is submitted twice.
+- UI language: English, 日本語, 中文 (Workspace dialog). Prompts are sent as written.
 
 ## Deploy to Cloud Run
 
@@ -82,7 +85,7 @@ Open http://127.0.0.1:8000 . Generation is usually 1–3+ minutes; the UI polls 
 PROJECT_ID=your-gcp-project BUCKET=your-gcs-bucket ./deploy/cloud-run.sh
 ```
 
-Optional: `REGION`, `SERVICE`, `OMNI_MODEL`, `ALLOW_UNAUTHENTICATED=false`. The script enables APIs, creates the runtime SA, and builds from source. Keep `--no-cpu-throttling` and `--max-instances 1` while `JobStore` is in-process memory.
+Optional: `REGION`, `SERVICE`, `OMNI_MODEL`, `ALLOW_UNAUTHENTICATED=false`. The script enables APIs, creates the runtime SA, and builds from source. Keep `--no-cpu-throttling` and `--max-instances 1`: a running generation is polled by the instance that started it. History itself is durable (see Workspace above), so scale-to-zero and redeploys keep it. `MAX_ACTIVE_JOBS` (default 8) caps generations in flight on the instance.
 
 ## Known limits
 

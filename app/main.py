@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
+import secrets
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi import FastAPI, HTTPException, Query, Request, UploadFile, File
+from fastapi.responses import FileResponse, RedirectResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, HttpUrl, model_validator
 
@@ -20,6 +26,8 @@ from app.gcs_util import sign_gcs_read_url, stage_images_to_gcs
 from app import prompt_enhancer
 from app.jobs import (
     JobStatus,
+    TERMINAL,
+    resume_job,
     job_store,
     reuse_images_from_job,
     reuse_videos_from_job,
@@ -45,12 +53,117 @@ from app.prompt_utils import (
     extract_reference_urls,
 )
 
+from app.workspace import workspace_id, owner_for, TOKEN_PATTERN, ConflictError, default_store
+
+
+@asynccontextmanager
+async def lifespan(app):
+    job_store.repository = default_store()
+    async def flush():
+        while True:
+            await asyncio.sleep(2)
+            failed = False
+            for job in list(job_store._jobs.values()):
+                try:
+                    await job_store.save(job)
+                except Exception:
+                    # Paid generation continues; reads expose persistence health separately.
+                    failed = True
+            app.state.storage_error = failed
+    app.state.storage_error = False
+    task = asyncio.create_task(flush())
+    yield
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+    for job in list(job_store._jobs.values()):
+        await job_store.save(job)
+
+
 app = FastAPI(
     title="Omni Flash Video Lab",
-    version="0.2.0",
+    version="0.3.0",
+    lifespan=lifespan,
     docs_url="/api/openapi",
     redoc_url=None,
 )
+
+@app.middleware("http")
+async def workspace_context(request: Request, call_next):
+    token = request.cookies.get("omni_workspace", "")
+    owner = owner_for(token) if TOKEN_PATTERN.fullmatch(token) else "local"
+    if int(request.headers.get("content-length", "0") or 0) > 28 * 1024 * 1024:
+        return JSONResponse({"detail": "Request exceeds 28 MB. Upload media files separately."}, status_code=413)
+    if request.method in {"POST", "PATCH", "DELETE"} and not _same_site(request):
+        return JSONResponse({"detail": "Cross-origin changes are not allowed"}, status_code=403)
+    if job_store.repository and owner == "local" and request.url.path.startswith("/api/") and request.url.path not in {"/api/health", "/api/workspace", "/api/examples", "/api/example"}:
+        return JSONResponse({"detail": "Open the workspace before using the API"}, status_code=401)
+    handle = workspace_id.set(owner)
+    try:
+        response = await call_next(request)
+        if request.url.path.startswith("/api/"):
+            response.headers["Cache-Control"] = "private, no-store"
+        else:
+            # The page and its scripts are revalidated on every load (a cheap 304),
+            # so a new deployment is what the next refresh shows.
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+    finally:
+        workspace_id.reset(handle)
+
+
+def _same_site(request: Request) -> bool:
+    """A change must come from the page this service served.
+
+    Behind a front end the page's host can arrive as X-Forwarded-Host, and a
+    local tunnel (`gcloud run services proxy`) serves the page from loopback.
+    """
+    origin = request.headers.get("origin")
+    if not origin:
+        return True
+    parsed = urlparse(origin)
+    served_as = {request.headers.get("host", "").lower()}
+    served_as.update(h.strip().lower() for h in request.headers.get("x-forwarded-host", "").split(",") if h.strip())
+    return parsed.netloc.lower() in served_as or parsed.hostname in {"localhost", "127.0.0.1", "::1"}
+
+
+@app.exception_handler(ConflictError)
+async def conflict_handler(request, exc):
+    return JSONResponse({"detail": str(exc)}, status_code=409)
+
+
+def workspace_response(request, token):
+    response = JSONResponse({"workspace": owner_for(token)[:12], "storage": "cloud" if settings.output_gcs_uri else "local", "version": settings.app_version})
+    # Cloud Run terminates TLS in front of the container and reports it in this header.
+    https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto", "").split(",")[0].strip() == "https"
+    response.set_cookie("omni_workspace", token, httponly=True, secure=https, samesite="strict", max_age=31536000)
+    return response
+
+
+@app.get("/api/workspace")
+async def open_workspace(request: Request):
+    token = request.cookies.get("omni_workspace", "")
+    if not TOKEN_PATTERN.fullmatch(token):
+        token = secrets.token_hex(32)
+    return workspace_response(request, token)
+
+
+class RestoreWorkspace(BaseModel):
+    recovery_key: str
+
+
+@app.post("/api/workspace")
+async def restore_workspace(body: RestoreWorkspace, request: Request):
+    try:
+        owner_for(body.recovery_key)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return workspace_response(request, body.recovery_key)
+
+
+@app.get("/api/workspace/export")
+async def export_workspace(request: Request):
+    return JSONResponse({"format": "omni-workspace-v1", "recovery_key": request.cookies.get("omni_workspace"), "note": "Keep private. This key opens your workspace on this deployment; media remains in cloud storage."}, headers={"Content-Disposition": 'attachment; filename="omni-workspace-recovery.json"'})
+
 
 STATIC_DIR = ROOT_DIR / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -66,13 +179,15 @@ class ReferenceImage(BaseModel):
     mime_type: str = "image/png"
     data: str | None = None
     url: str | None = None
+    uri: str | None = None
 
     @model_validator(mode="after")
     def one_source(self):
         has_data = bool(self.data and len(self.data) >= 8)
         has_url = bool(self.url and self.url.startswith(("http://", "https://")))
-        if has_data == has_url:
-            raise ValueError("reference image needs either base64 data or an http(s) url")
+        has_uri = bool(self.uri and self.uri.startswith("gs://"))
+        if sum([has_data, has_url, has_uri]) != 1:
+            raise ValueError("reference image needs exactly one of base64 data, http(s) url or uploaded gs:// uri")
         return self
 
 
@@ -87,7 +202,8 @@ class MediaRef(BaseModel):
 
 
 class GenerateRequest(BaseModel):
-    prompt: str = Field(default="")
+    prompt: str = Field(default="", max_length=30000)
+    request_id: str | None = Field(default=None, pattern=r"^[a-zA-Z0-9_-]{8,80}$")
     image_urls: list[HttpUrl] = Field(default_factory=list)
     # Browser-fetched images — preferred when server cannot reach OSS DNS.
     reference_images: list[ReferenceImage] = Field(default_factory=list)
@@ -124,7 +240,7 @@ async def index() -> FileResponse:
 
 @app.get("/docs")
 async def docs_page() -> FileResponse:
-    return FileResponse(STATIC_DIR / "docs.html")
+    return FileResponse(STATIC_DIR / "index.html")
 
 
 @app.get("/api/health")
@@ -132,6 +248,8 @@ async def health() -> dict:
     default_id, _profile, _assumed = resolve_model(None)
     return {
         "ok": True,
+        "version": settings.app_version,
+        "storage_ok": not getattr(app.state, "storage_error", False),
         "project_configured": bool(settings.google_cloud_project),
         "model": default_id,
         "models": [profile.to_public() for profile in CATALOG.values()],
@@ -146,6 +264,36 @@ async def health() -> dict:
         "prompt_enhance_model": settings.prompt_enhance_model,
         "docs": "/docs",
     }
+
+
+@app.post("/api/assets")
+async def upload_asset(file: UploadFile = File(...)):
+    from app.gcs_util import upload_local_file_to_gcs, guess_ext
+    allowed = {"image/png", "image/jpeg", "image/webp", "image/heic", "image/heif", "video/mp4", "video/webm", "video/quicktime", "video/mpeg"}
+    if file.content_type not in allowed:
+        raise HTTPException(400, "Unsupported media type. Use PNG, JPEG, WebP, HEIC or MP4/WebM/MOV.")
+    prefix = gcs_prefix_for_inputs()
+    if not prefix:
+        raise HTTPException(503, "Configure input cloud storage before uploading media")
+    asset_id = secrets.token_hex(16)
+    ext = guess_ext(file.filename or "", file.content_type)
+    path = OUTPUT_DIR / f"upload-{asset_id}{ext}"
+    size = 0
+    try:
+        with path.open("wb") as stream:
+            while chunk := await file.read(1024 * 1024):
+                size += len(chunk)
+                if size > 20 * 1024 * 1024:
+                    raise HTTPException(413, "Demo upload limit: 20 MB per file")
+                stream.write(chunk)
+        if size == 0:
+            raise HTTPException(400, "The uploaded file is empty")
+        uri = prefix + f"workspaces/{workspace_id.get()}/{asset_id}{ext}"
+        await asyncio.to_thread(upload_local_file_to_gcs, path, gcs_uri=uri, mime_type=file.content_type)
+        return {"uri": uri, "mime_type": file.content_type, "name": file.filename, "bytes": size}
+    finally:
+        path.unlink(missing_ok=True)
+        await file.close()
 
 
 @app.get("/api/example")
@@ -223,8 +371,29 @@ async def test_gcs_upload(body: GcsUploadTestRequest) -> dict:
     return job.to_dict()
 
 
+generation_admission = asyncio.Lock()
+
+
 @app.post("/api/generate")
 async def generate(body: GenerateRequest) -> dict:
+    async with generation_admission:
+        return await _generate(body)
+
+
+async def _generate(body: GenerateRequest) -> dict:
+    request_hash = hashlib.sha256(body.model_dump_json(exclude={"request_id"}).encode()).hexdigest()
+    job_id = hashlib.sha256((workspace_id.get() + ":" + body.request_id).encode()).hexdigest()[:32] if body.request_id else None
+    if job_id:
+        existing = await job_store.get(job_id)
+        if existing:
+            if existing.request_hash != request_hash:
+                raise ConflictError("Request identifier already used with different inputs")
+            return existing.to_dict()
+    jobs = await job_store.list()
+    if sum(j.status not in TERMINAL for j in job_store._jobs.values()) >= settings.max_active_jobs:
+        raise HTTPException(429, "Generation capacity is busy. Wait for a running task to finish.")
+    if len(jobs) >= settings.max_workspace_jobs:
+        raise HTTPException(429, "Workspace record limit reached. Export your records and contact the deployment owner.")
     if body.resolution not in {"360p", "720p", "1080p", "4k"}:
         raise HTTPException(400, "resolution must be one of 360p, 720p, 1080p, 4k")
     if body.aspect_ratio not in {"16:9", "9:16"}:
@@ -282,6 +451,8 @@ async def generate(body: GenerateRequest) -> dict:
             entry["data"] = img.data
         if img.url:
             entry["url"] = img.url
+        if img.uri:
+            entry["uri"] = img.uri
         client_images.append(entry)
     client_videos = [
         {
@@ -372,6 +543,9 @@ async def generate(body: GenerateRequest) -> dict:
             f"{generate_task} needs {need} (upload, paste a URL, or Load example)",
         )
 
+    for uri in [body.source_video_uri] + [x.get("uri") for x in client_images + client_videos]:
+        if uri and "/workspaces/" in uri and f"/workspaces/{workspace_id.get()}/" not in uri:
+            raise HTTPException(403, "This uploaded media belongs to another workspace")
     requested_source = (body.source_video_uri or "").strip() or None
     source_video = requested_source
     previous_interaction_id = None
@@ -381,6 +555,8 @@ async def generate(body: GenerateRequest) -> dict:
         src = await job_store.get(body.source_job_id)
         if not src:
             raise HTTPException(404, f"source_job_id not found: {body.source_job_id}")
+        if src.status != JobStatus.completed or not src.video_uri:
+            raise HTTPException(400, "Choose a completed source with a playable video")
         if not source_video:
             source_video = src.video_uri
         previous_interaction_id = followup_chain_id(
@@ -394,7 +570,15 @@ async def generate(body: GenerateRequest) -> dict:
             requested_video_uri=requested_source,
             source_video_uri=src.video_uri,
         )
-        if mode == "upscale":
+        if previous_interaction_id:
+            age = (datetime.now(timezone.utc) - datetime.fromisoformat(src.created_at)).total_seconds()
+            if age >= 6.5 * 86400:
+                previous_interaction_id = None  # Stored interactions expire; use the durable clip.
+        same_source = not requested_source or requested_source == src.video_uri
+        limit = profile.edit_max if mode in {"edit", "continue"} else profile.upscale_max if mode == "upscale" else profile.extend_input_max
+        if same_source and limit is not None and src.duration_sec is not None and src.duration_sec > limit + 0.05:
+            raise HTTPException(400, f"This source is {src.duration_sec:g}s; {mode} accepts at most {limit:g}s on this model.")
+        if mode == "upscale" and same_source:
             source_res = src.meta.get("output_resolution")
             allowed = upscale_targets(source_res)
             if allowed is not None and body.resolution not in allowed:
@@ -418,8 +602,28 @@ async def generate(body: GenerateRequest) -> dict:
         edit_images = []
         client_videos = []
 
-    job = await job_store.create()
-    asyncio.create_task(
+    image_count = len(reuse_images) or len(client_images) or len(urls)
+    if mode == "generate":
+        if generate_task == "frames_to_video" and image_count != 2:
+            raise HTTPException(400, "First and last frame requires exactly two images")
+        if generate_task == "image_to_video" and image_count != 1:
+            raise HTTPException(400, "First frame requires exactly one image")
+        if image_count > profile.reference_images_max:
+            raise HTTPException(400, f"At most {profile.reference_images_max} reference images")
+        low, high = duration_bounds(profile, mode=mode, generate_task=generate_task)
+        if not low <= body.duration <= high:
+            raise HTTPException(400, f"Duration must be {low}–{high}s for this operation")
+    snapshot = body.model_dump(exclude={"request_id", "reference_images", "reference_videos"})
+    snapshot["reference_images"] = [{"mime_type": x.mime_type, "url": x.url, "uri": x.uri, "uploaded": bool(x.data)} for x in body.reference_images]
+    snapshot["reference_videos"] = [{"mime_type": x.mime_type, "uri": x.uri, "uploaded": bool(x.data)} for x in body.reference_videos]
+    job = await job_store.create(job_id=job_id, request_hash=request_hash, request=snapshot)
+    if not getattr(job, "_created_here", False):
+        return job.to_dict()
+    # The first response already says what this task is and what it derives from.
+    job.mode = mode
+    job.source_job_id = generate_source_job_id if mode == "generate" else body.source_job_id
+    job.source_video_uri = source_video
+    job_store.track(job,
         run_generation_job(
             job,
             prompt=prompt_text,
@@ -450,10 +654,28 @@ async def generate(body: GenerateRequest) -> dict:
     return job.to_dict()
 
 
+@app.get("/api/submissions/{request_id}")
+async def find_submission(request_id: str) -> dict:
+    """Did this submission start a task? Lets a reloaded page settle without sending again."""
+    job = await job_store.get(hashlib.sha256((workspace_id.get() + ":" + request_id).encode()).hexdigest()[:32])
+    if not job:
+        raise HTTPException(404, "No task was started for this submission")
+    return job.to_dict()
+
+
 @app.get("/api/jobs")
 async def list_jobs() -> dict:
     jobs = await job_store.list()
-    return {"jobs": [j.to_dict() for j in jobs]}
+    records = []
+    for job in jobs:
+        raw = job.to_dict()
+        raw.pop("request", None)
+        raw.pop("events", None)
+        raw.pop("thoughts", None)
+        raw["shot_list"] = (raw.get("shot_list") or job.request.get("prompt") or "")[:300]
+        raw["meta"] = {key: job.meta.get(key) for key in ["model", "output_resolution", "generate_task", "error_kind"]}
+        records.append(raw)
+    return {"jobs": records, "storage_ok": not getattr(app.state, "storage_error", False)}
 
 
 @app.get("/api/jobs/{job_id}")
@@ -461,7 +683,74 @@ async def get_job(job_id: str) -> dict:
     job = await job_store.get(job_id)
     if not job:
         raise HTTPException(404, "Job not found")
+    if job_store.repository:
+        library, _ = await asyncio.to_thread(job_store.repository.read, f"{job.owner}/library/{job.id}.json")
+        job.library = library or {}
     return job.to_dict()
+
+
+class LibraryUpdate(BaseModel):
+    version: int = Field(ge=0)
+    title: str | None = Field(default=None, max_length=120)
+    collection: str | None = Field(default=None, max_length=80)
+    notes: str | None = Field(default=None, max_length=2000)
+    favorite: bool | None = None
+    archived: bool | None = None
+    trashed: bool | None = None
+
+
+@app.patch("/api/jobs/{job_id}")
+async def update_work(job_id: str, body: LibraryUpdate):
+    job = await job_store.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    changes = body.model_dump(exclude={"version"}, exclude_none=True)
+    if changes.get("trashed") and job.status not in TERMINAL:
+        raise HTTPException(409, "Running tasks cannot be moved to trash. Wait for completion.")
+    await job_store.update_library(job, changes, body.version)
+    return job.to_dict()
+
+
+@app.post("/api/jobs/{job_id}/recover")
+async def recover_status(job_id: str):
+    job = await job_store.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    if not job.interaction_id:
+        raise HTTPException(400, "No interaction ID was recorded. Automatic retry could duplicate a paid request.")
+    if job.id not in job_store.running and job.status != JobStatus.completed:
+        job_store.track(job, resume_job(job))
+    return job.to_dict()
+
+
+@app.get("/api/jobs/{job_id}/export")
+async def export_record(job_id: str):
+    job = await job_store.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    return JSONResponse(job.to_dict(), headers={"Content-Disposition": f'attachment; filename="omni-{job.id}.json"'})
+
+
+@app.get("/api/jobs/{job_id}/assets/{kind}/{index}")
+async def reference_asset(job_id: str, kind: str, index: int):
+    job = await job_store.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    items = job.meta.get("gcs_ref_items" if kind == "images" else "gcs_video_items") or []
+    if kind not in {"images", "videos"} or not 0 <= index < len(items):
+        raise HTTPException(404, "Reference not available")
+    uri = items[index]["uri"]
+    try:
+        signed = await asyncio.to_thread(sign_gcs_read_url, uri)
+    except Exception:
+        # No signing identity (a local run on user credentials): hand the bytes over directly.
+        from app.gcs_util import download_gcs_bytes
+        try:
+            data = await asyncio.to_thread(download_gcs_bytes, uri)
+        except Exception as exc:
+            raise HTTPException(502, "This reference is temporarily unavailable. It is still saved; reload to retry.") from exc
+        return Response(data, media_type=items[index].get("mime_type") or "application/octet-stream")
+    return RedirectResponse(signed, status_code=302)
 
 
 @app.post("/api/jobs/{job_id}/fetch-video")
@@ -476,7 +765,7 @@ async def fetch_job_video(job_id: str) -> dict:
         raise HTTPException(400, "Job has no video_uri to fetch")
 
     out_path = Path(job.video_path) if job.video_path else (OUTPUT_DIR / f"{job_id}.mp4")
-    job.touch(JobStatus.saving, f"Re-fetching {job.video_uri}…")
+
     try:
         if job.video_uri.startswith("gs://"):
             await asyncio.to_thread(
@@ -486,9 +775,7 @@ async def fetch_job_video(job_id: str) -> dict:
             data = await omni_client.download_gcs_or_http(job.video_uri)
             out_path.write_bytes(data)
     except Exception as exc:
-        job.error = str(exc)
-        job.touch(JobStatus.failed, str(exc))
-        raise HTTPException(502, str(exc)) from exc
+        raise HTTPException(502, "Playback download failed; the generated result is preserved. Try again.") from exc
 
     job.video_path = str(out_path)
     job.error = None
@@ -510,6 +797,12 @@ async def get_video_by_uri(uri: str = Query(..., description="gs:// object to pl
     """Signed playback for a clip that is not a job output (e.g. a pasted source)."""
     if not uri.startswith("gs://"):
         raise HTTPException(400, "uri must be a gs:// object")
+    known = set()
+    for job in await job_store.list():
+        known.update(x for x in [job.video_uri, job.source_video_uri] if x)
+        known.update(x["uri"] for x in (job.meta.get("gcs_ref_items") or []) + (job.meta.get("gcs_video_items") or []))
+    if uri not in known:
+        raise HTTPException(404, "Media is not in this workspace")
     bucket = uri[5:].split("/", 1)[0]
     # Signing is done with the app's own credentials, so restrict it to the
     # buckets this demo owns rather than anything the caller names.
@@ -518,7 +811,7 @@ async def get_video_by_uri(uri: str = Query(..., description="gs:// object to pl
     try:
         signed = await asyncio.to_thread(sign_gcs_read_url, uri)
     except Exception as exc:
-        raise HTTPException(502, f"Failed to sign GCS URL: {exc}") from exc
+        raise HTTPException(502, "Media playback is temporarily unavailable. The saved video is preserved; retry playback.") from exc
     return RedirectResponse(url=signed, status_code=302)
 
 
@@ -614,7 +907,7 @@ async def get_job_suggestions(job_id: str) -> dict:
         return {"suggestions": [], "reason": "no prompt to work from"}
 
     edit_limit = profile_for(job.meta.get("model")).edit_max
-    allow_edit = job.duration_sec is None or job.duration_sec <= edit_limit
+    allow_edit = job.duration_sec is None or job.duration_sec <= edit_limit + 0.05
     suggestions = await prompt_enhancer.suggest_followups(
         scene_prompt, allow_edit=allow_edit
     )
@@ -642,11 +935,27 @@ async def get_job_video(job_id: str):
         try:
             signed = await asyncio.to_thread(sign_gcs_read_url, job.video_uri)
         except Exception as exc:
-            raise HTTPException(502, f"Failed to sign GCS URL: {exc}") from exc
+            raise HTTPException(502, "Media playback is temporarily unavailable. The saved video is preserved; retry playback.") from exc
         return RedirectResponse(url=signed, status_code=302)
 
     if job.video_uri and job.video_uri.startswith(("http://", "https://")):
         return RedirectResponse(url=job.video_uri, status_code=302)
 
     raise HTTPException(404, "Video file missing")
+
+
+@app.get("/api/jobs/{job_id}/download", response_model=None)
+async def download_job_video(job_id: str):
+    job = await job_store.get(job_id)
+    if not job or job.status != JobStatus.completed:
+        raise HTTPException(404, "Video not ready")
+    if job.video_path and Path(job.video_path).exists():
+        return FileResponse(job.video_path, media_type="video/mp4", filename=f"omni-{job.id}.mp4")
+    if job.video_uri and job.video_uri.startswith("gs://"):
+        try:
+            signed = await asyncio.to_thread(sign_gcs_read_url, job.video_uri, download=f"omni-{job.id}.mp4")
+        except Exception as exc:
+            raise HTTPException(502, "The download is temporarily unavailable. The saved video is preserved; try again.") from exc
+        return RedirectResponse(signed, status_code=302)
+    return await get_job_video(job_id)
 

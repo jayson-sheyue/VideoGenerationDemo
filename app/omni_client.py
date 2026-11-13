@@ -243,11 +243,21 @@ def _create_interaction_sync(payload: dict[str, Any]) -> dict[str, Any]:
     )
     if response.status_code >= 400:
         raise OmniAPIError(
-            f"Omni create failed ({response.status_code}): {response.text[:2000]}",
+            f"Omni create failed ({response.status_code}): {_api_error_text(response)}",
             status_code=response.status_code,
             body=_safe_json(response),
         )
     return response.json()
+
+
+def _api_error_text(response: requests.Response) -> str:
+    """The API's own code and message as one readable line; raw text when it sends none."""
+    body = _safe_json(response)
+    if isinstance(body, dict):
+        text = _error_text(body.get("error"))
+        if text:
+            return text
+    return response.text[:2000]
 
 
 def _get_interaction_sync(interaction_id: str) -> dict[str, Any]:
@@ -272,7 +282,7 @@ def _get_interaction_sync(interaction_id: str) -> dict[str, Any]:
         )
     if response.status_code >= 400:
         raise OmniAPIError(
-            f"Omni poll failed ({response.status_code}): {response.text[:2000]}",
+            f"Omni poll failed ({response.status_code}): {_api_error_text(response)}",
             status_code=response.status_code,
             body=_safe_json(response),
         )
@@ -290,8 +300,19 @@ async def get_interaction(interaction_id: str) -> dict[str, Any]:
 async def poll_until_done(interaction_id: str) -> dict[str, Any]:
     deadline = time.monotonic() + settings.poll_timeout_sec
     last: dict[str, Any] = {}
+    failures = 0
     while time.monotonic() < deadline:
-        last = await get_interaction(interaction_id)
+        try:
+            last = await get_interaction(interaction_id)
+            failures = 0
+        except (requests.RequestException, OmniAPIError) as exc:
+            if isinstance(exc, OmniAPIError) and exc.status_code not in {429, 500, 502, 503, 504}:
+                raise
+            failures += 1
+            if failures > 3:
+                raise
+            await asyncio.sleep(min(settings.poll_interval_sec * failures, 30))
+            continue
         status = (last.get("status") or "").lower()
         if status in {"completed", "failed", "cancelled", "canceled"}:
             return last

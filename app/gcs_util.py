@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import base64
+import threading
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlparse
@@ -518,8 +520,38 @@ def signing_service_account() -> str:
     return f"{project}@appspot.gserviceaccount.com"
 
 
-def sign_gcs_read_url(gcs_uri: str, *, minutes: int | None = None) -> str:
-    """V4 signed HTTPS URL so the browser can play directly from the bucket."""
+_signed_lock = threading.Lock()
+_signed: dict[tuple[str, str | None, int], tuple[str, float]] = {}
+
+
+def sign_gcs_read_url(gcs_uri: str, *, minutes: int | None = None, download: str | None = None) -> str:
+    """V4 signed HTTPS URL so the browser can play directly from the bucket.
+
+    A portfolio page asks for the same clips again and again. A URL is handed out
+    for at most a quarter of its lifetime, so it always has most of it left, and
+    the browser can reuse the bytes it already fetched for that URL.
+    """
+    from app.config import settings as _settings
+
+    ttl = max(5, minutes if minutes is not None else _settings.signed_url_ttl_minutes)
+    key = (gcs_uri, download, ttl)
+    now = time.monotonic()
+    with _signed_lock:
+        hit = _signed.get(key)
+        if hit and hit[1] > now:
+            return hit[0]
+    url = _sign_gcs_read_url(gcs_uri, minutes=ttl, download=download)
+    with _signed_lock:
+        if len(_signed) > 2000:
+            for stale in [k for k, v in _signed.items() if v[1] <= now]:
+                _signed.pop(stale, None)
+            if len(_signed) > 2000:
+                _signed.clear()
+        _signed[key] = (url, now + ttl * 60 / 4)
+    return url
+
+
+def _sign_gcs_read_url(gcs_uri: str, *, minutes: int | None = None, download: str | None = None) -> str:
     from datetime import timedelta
 
     import google.auth
@@ -549,6 +581,8 @@ def sign_gcs_read_url(gcs_uri: str, *, minutes: int | None = None) -> str:
         "expiration": timedelta(minutes=max(5, minutes)),
         "method": "GET",
     }
+    if download:
+        kwargs["response_disposition"] = f'attachment; filename="{download}"'
     # User ADC has no private key — IAM signBlob via a service account.
     if not getattr(credentials, "signer", None) and not hasattr(credentials, "sign_bytes"):
         kwargs["service_account_email"] = sa

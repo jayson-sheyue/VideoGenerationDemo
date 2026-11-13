@@ -72,9 +72,11 @@ echo "==> Deploying ${SERVICE} to ${REGION}"
 # --no-cpu-throttling: generation jobs keep polling Omni for minutes after the
 #   HTTP response returns; without it the CPU is frozen between requests.
 # --min-instances 0: scales to zero when idle (no standby cost). The browser
-#   polls /api/jobs/{id} every 2.5s during generation, which keeps the instance
-#   alive; JobStore is in-memory, so history is lost once it does scale down.
-# --max-instances 1: every poll must land on the instance that started the job.
+#   polls /api/jobs while a generation runs, which keeps the instance alive.
+#   Task records and portfolio metadata live under OUTPUT_GCS_URI/workspaces,
+#   so history is still there after a scale-down or a redeploy.
+# --max-instances 1: a running generation is polled by the instance that
+#   started it.
 gcloud run deploy "${SERVICE}" \
   --source . \
   --project "${PROJECT_ID}" \

@@ -4,7 +4,7 @@
 
 **Gemini Omni Flash** 向けのローカル / Cloud Run 実験台です。既定モデルは正式版 **Omni 1.2 Flash**（`gemini-omni-1.2-flash`）。UI から **1.1 Flash Preview** や任意のモデル ID にも切り替えられます。ショットリストと参照画像／参照動画を渡し、Google Cloud **Agent Platform Interactions API** で生成・多轮編集・延長・拡大を行います。
 
-能力とプロンプトの詳細は [learning_guide.md](./learning_guide.md)（中国語）。実行中の公式ドキュメントハブは `/docs`。この README は起動・デプロイ・API の使い方です。
+能力とプロンプトの詳細は [learning_guide.md](./learning_guide.md)（中国語）。画面内の **API ガイド**（`/docs` でも開けます）に各機能、モデル別の上限、公式ページをまとめています。この README は起動・デプロイ・API の使い方です。
 
 ## できること
 
@@ -50,7 +50,15 @@ http://127.0.0.1:8000 を開きます。生成は 1–3 分以上かかること
 PROJECT_ID=your-gcp-project BUCKET=your-gcs-bucket ./deploy/cloud-run.sh
 ```
 
-`JobStore` がプロセスメモリのため、`--no-cpu-throttling` と `--max-instances 1` を維持します。
+実行中の生成は開始したインスタンスがポーリングするため、`--no-cpu-throttling` と `--max-instances 1` を維持します。履歴は GCS に保存されるので、ゼロスケールや再デプロイ後も残ります。
+
+## スタジオ・作品集・タスク履歴
+
+- **スタジオ**：8 つの機能それぞれが自分のパラメータだけを表示し、下書きを個別に保持します。再読込後も下書きと開いていた作品が戻ります。
+- **プレビュー**：完成した動画から 編集を継続 / 編集 / 延長 / 高解像度化 にそのまま進めます。「この設定を使用」で当時の入力をスタジオに戻せます。入力、送信したプロンプト、同じ元動画から派生したバージョン（並べて再生）を確認できます。
+- **作品集**：タイトル、コレクション、メモ、お気に入り、アーカイブ、復元できるごみ箱。
+- **ワークスペース**：履歴はブラウザのワークスペース（http-only cookie）に紐付きます。「ワークスペース → 復元ファイルを書き出す」で別の端末から同じワークスペースを開けます。記録は `OUTPUT_GCS_URI/workspaces/`（`WORKSPACE_STORE_URI` で変更可）に保存されます。
+- 表示言語：English / 日本語 / 中文。
 
 ## 既知の制限
 
