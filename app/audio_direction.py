@@ -17,6 +17,15 @@ def compose_media_prompt(original: str, *, preferences: AudioPreferences,
     the authority for audio. Every fallback is conditional, including exclusions.
     """
     sections = ["ORIGINAL USER PROMPT (authoritative):\n" + original]
+    if not no_subtitles:
+        # Stated as part of the scene, right after the prompt: a single rule at the
+        # end of the list is not enough for the model to draw subtitles.
+        sections.append(
+            "SUBTITLES:\nUnless the original prompt says otherwise, "
+            + ("the newly appended segment" if extend else "the video")
+            + " has burned-in subtitles: every spoken line appears as legible subtitle text "
+            "at the bottom center of the frame while it is spoken, in the language spoken."
+        )
     if visual_guidance:
         sections.append(
             "OPTIONAL VISUAL GUIDANCE (subordinate to the original prompt; "
@@ -64,9 +73,13 @@ def compose_media_prompt(original: str, *, preferences: AudioPreferences,
             "the requested audible elements; keep every other sound absent."
         )
     rules.append(
-        "Captions default (ONLY if unspecified in the original prompt): "
-        + ("Omit burned-in subtitles and captions." if no_subtitles else
-           "Include readable captions for any spoken words, in their spoken language.")
+        "Subtitles default (unchecked; ONLY if unspecified in the original prompt): "
+        "Omit burned-in subtitles and captions."
+        if no_subtitles else
+        "Subtitles default (checked; ONLY if unspecified in the original prompt): "
+        "Burn subtitles into the picture. While each line is spoken, show its exact words as "
+        "clearly legible subtitle text at the bottom center of the frame, in the language spoken "
+        "and synchronized with the speech. One line at a time; the text is part of the video image."
     )
     if extend:
         rules.append("These defaults apply ONLY to the newly appended segment. "

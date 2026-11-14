@@ -30,6 +30,25 @@ class AudioPromptTests(unittest.TestCase):
                 self.assertNotIn('No background music.', sent)
                 self.assertEqual('All sound defaults are off.' in sent, not any(flags))
 
+    def test_subtitles_are_stated_with_the_scene_when_ticked_and_omitted_otherwise(self):
+        prompt = '她说：“我们出发吧。”'
+        on = compose_media_prompt(prompt, preferences=AudioPreferences(), no_subtitles=False,
+                                  visual_guidance='Slow camera move.')
+        # The scene-level statement sits between the prompt and any polishing notes.
+        self.assertLess(on.index(prompt), on.index('SUBTITLES:\nUnless the original prompt says otherwise, the video has burned-in subtitles'))
+        self.assertLess(on.index('SUBTITLES:'), on.index('OPTIONAL VISUAL GUIDANCE'))
+        self.assertIn('Subtitles default (checked; ONLY if unspecified in the original prompt): Burn subtitles into the picture.', on)
+        self.assertNotIn('Omit burned-in subtitles', on)
+
+        off = compose_media_prompt(prompt, preferences=AudioPreferences(), no_subtitles=True)
+        self.assertNotIn('SUBTITLES:', off)
+        self.assertNotIn('Burn subtitles', off)
+        self.assertIn('Subtitles default (unchecked; ONLY if unspecified in the original prompt): Omit burned-in subtitles and captions.', off)
+
+        more = compose_media_prompt(prompt, preferences=AudioPreferences(), no_subtitles=False, extend=True)
+        self.assertIn('the newly appended segment has burned-in subtitles', more)
+        self.assertNotIn('the video has burned-in subtitles', more)
+
     def test_app_preferences_and_legacy_defaults(self):
         body = GenerateRequest(audio_preferences={'speech': False, 'music': True, 'effects': False})
         self.assertFalse(body.audio_preferences.speech)
