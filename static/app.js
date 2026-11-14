@@ -467,7 +467,6 @@ function renderForm() {
     $(key).checked = d[key];
   const soundSupported = ["generate", "extend"].includes(c.mode);
   $("audioOptions").hidden = !soundSupported;
-  $("audioUnavailable").hidden = soundSupported;
   $("audioExtendHelp").hidden = c.mode !== "extend";
   $("seedField").hidden = !p.supports_seed;
   $("labelsField").hidden = !p.supports_labels;
@@ -955,6 +954,10 @@ function renderPreview(job) {
   $("trashWork").disabled = !terminal.has(job.status);
   renderDetail(job);
 }
+// The sound choices a task was submitted with, when it recorded any.
+function soundOf(job) {
+  return job.request?.audio_preferences || job.meta?.audio_preferences || {};
+}
 // The parameters this task was submitted with, limited to what its function takes.
 function settingsOf(job) {
   const r = job.request || {};
@@ -1212,9 +1215,10 @@ function restoreSettings(job) {
     sourceUri: req.source_video_uri || "",
     stateful: req.stateful !== false,
     enhance: req.enhance_prompt || false,
-    audioSpeech: (req.audio_preferences || job.meta?.audio_preferences)?.speech ?? ((req.generate_audio ?? job.meta?.generate_audio) !== false),
-    audioMusic: (req.audio_preferences || job.meta?.audio_preferences)?.music ?? ((req.generate_audio ?? job.meta?.generate_audio) !== false && (req.no_bgm ?? job.meta?.no_bgm) !== true),
-    audioEffects: (req.audio_preferences || job.meta?.audio_preferences)?.effects ?? ((req.generate_audio ?? job.meta?.generate_audio) !== false),
+    // Tasks from before the sound choices existed open with the standard choices.
+    audioSpeech: soundOf(job).speech !== false,
+    audioMusic: soundOf(job).music !== false,
+    audioEffects: soundOf(job).effects !== false,
     captions: (req.no_subtitles ?? job.meta?.no_subtitles) === false,
     images: (job.meta?.gcs_ref_items || []).map((x) => ({
       ...x,
