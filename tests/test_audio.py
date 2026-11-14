@@ -28,6 +28,7 @@ class AudioPromptTests(unittest.TestCase):
                     self.assertIn(f"{label} default ({'checked' if flag else 'unchecked'}; ONLY if unspecified", sent)
                 self.assertNotIn('No dialogue. No speech', sent)
                 self.assertNotIn('No background music.', sent)
+                self.assertEqual('All sound defaults are off.' in sent, not any(flags))
 
     def test_app_preferences_and_legacy_defaults(self):
         body = GenerateRequest(audio_preferences={'speech': False, 'music': True, 'effects': False})

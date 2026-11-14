@@ -56,6 +56,13 @@ def compose_media_prompt(original: str, *, preferences: AudioPreferences,
     for name, (enabled, include, omit) in defaults.items():
         rules.append(f"{name} default ({'checked' if enabled else 'unchecked'}; "
                      f"ONLY if unspecified in the original prompt): {include if enabled else omit}")
+    if not any(preferences.model_dump().values()):
+        rules.append(
+            "All sound defaults are off. Unless the original prompt explicitly requests sound, "
+            "produce a completely silent video with no audible soundtrack, including incidental "
+            "environmental or recording noise. If it explicitly requests sound, include ONLY "
+            "the requested audible elements; keep every other sound absent."
+        )
     rules.append(
         "Captions default (ONLY if unspecified in the original prompt): "
         + ("Omit burned-in subtitles and captions." if no_subtitles else
