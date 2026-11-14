@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse, RedirectResponse, JSONResponse, Resp
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, HttpUrl, model_validator
 
+from app.audio_direction import AudioPreferences
 from app.config import (
     ACTIVE_PROXY,
     IS_CLOUD_RUN,
@@ -81,7 +82,7 @@ async def lifespan(app):
 
 app = FastAPI(
     title="Omni Flash Video Lab",
-    version="0.3.0",
+    version=settings.app_version,
     lifespan=lifespan,
     docs_url="/api/openapi",
     redoc_url=None,
@@ -214,7 +215,8 @@ class GenerateRequest(BaseModel):
     aspect_ratio: str = Field(default="16:9")
     generate_audio: bool = True
     no_subtitles: bool = True
-    no_bgm: bool = True
+    no_bgm: bool = False
+    audio_preferences: AudioPreferences | None = None
     # generate | continue | edit | extend | upscale
     mode: str = Field(default="generate")
     # Omni generate task: text_to_video | image_to_video | frames_to_video | reference_to_video
@@ -636,6 +638,7 @@ async def _generate(body: GenerateRequest) -> dict:
             generate_audio=body.generate_audio,
             no_subtitles=body.no_subtitles,
             no_bgm=body.no_bgm,
+            audio_preferences=body.audio_preferences,
             mode=mode,
             source_video_uri=source_video,
             source_job_id=generate_source_job_id if mode == "generate" else body.source_job_id,

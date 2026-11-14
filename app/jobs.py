@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from app import omni_client, prompt_enhancer
+from app.audio_direction import AudioPreferences, compose_media_prompt
 from app.workspace import workspace_id, ConflictError
 from app.config import OUTPUT_DIR, gcs_prefix_for_inputs, settings
 from app.model_catalog import ModelProfile, profile_for, upscale_targets
@@ -24,11 +25,8 @@ from app.gcs_util import (
     upload_local_file_to_gcs,
 )
 from app.prompt_utils import (
-    build_control_prefix,
-    dialogue_lock,
     download_image_bytes,
     extract_reference_urls,
-    extract_spoken_lines,
     frame_lock_prefix,
     reference_lock_prefix,
     rewrite_image_refs,
@@ -653,6 +651,7 @@ async def run_generation_job(
     generate_audio: bool,
     no_subtitles: bool,
     no_bgm: bool,
+    audio_preferences: AudioPreferences | None = None,
     mode: str = "generate",
     source_video_uri: str | None = None,
     source_job_id: str | None = None,
@@ -674,6 +673,9 @@ async def run_generation_job(
             profile_for(model or settings.omni_model),
             profile_assumed,
         )
+        preferences = audio_preferences or AudioPreferences(
+            speech=generate_audio, music=generate_audio and not no_bgm, effects=generate_audio
+        )
         duration_str = f"{duration}s"
         mode = (mode or "generate").strip().lower()
         job.mode = mode
@@ -685,9 +687,11 @@ async def run_generation_job(
             "duration": duration_str,
             "resolution": resolution,
             "aspect_ratio": aspect_ratio,
-            "generate_audio": generate_audio,
+            "audio_preferences": preferences.model_dump() if mode in {"generate", "extend"} else None,
+            "audio_policy": "original-prompt-first-v1" if mode in {"generate", "extend"} else None,
+            "generate_audio": any(preferences.model_dump().values()),
             "no_subtitles": no_subtitles,
-            "no_bgm": no_bgm,
+            "no_bgm": not preferences.music,
             "enhance_prompt": enhance_prompt,
             "prompt_original": prompt,
             "model": model_id,
@@ -837,6 +841,11 @@ async def run_generation_job(
             if api_task == "edit" and enhance_prompt and "keep everything else" not in edit_prompt.lower():
                 edit_prompt = (
                     f"{edit_prompt.rstrip('.')}. Keep everything else the same."
+                )
+            if api_task == "extend":
+                edit_prompt = compose_media_prompt(
+                    prompt.strip(), preferences=preferences, no_subtitles=no_subtitles,
+                    visual_guidance=edit_prompt if edit_prompt != prompt.strip() else "", extend=True,
                 )
             if edit_images:
                 edit_prompt = rewrite_image_refs(edit_prompt, len(edit_images))
@@ -1030,59 +1039,31 @@ async def run_generation_job(
             )
 
         rewritten = rewrite_video_refs(rewrite_image_refs(prompt_body, len(images)))
-        spoken = extract_spoken_lines(prompt_body)
         job.meta["shot_list"] = prompt_body
-
-        # Native path: send the user's prompt (plus official <IMAGE_REF>/<VIDEO_REF>
-        # tokens). Control prefixes, dialogue locks, and motion notes are optional
-        # polish only — they must not change what the API is shown by default.
+        visual_guidance = ""
         if not enhance_prompt:
             job.meta["prompt_enhanced"] = False
             job.meta["prompt_enhance_reason"] = "disabled"
-            final_prompt = rewritten
         elif api_task == "text_to_video":
             job.touch(JobStatus.submitting, "Polishing shot list…")
             polished = await prompt_enhancer.enhance(rewritten, kind="generate")
             job.meta["prompt_enhanced"] = polished["enhanced"]
             job.meta["prompt_enhance_reason"] = polished["reason"]
-            body_text = rewritten
             if polished["enhanced"]:
-                job.meta["prompt_original"] = rewritten
-                body_text = polished["prompt"]
-            speech = dialogue_lock(prompt_body)
-            control = build_control_prefix(
-                duration=duration_str,
-                resolution=resolution,
-                aspect_ratio=aspect_ratio,
-                generate_audio=generate_audio,
-                no_subtitles=no_subtitles,
-                no_bgm=no_bgm,
-                spoken_lines=spoken,
-            )
-            final_prompt = "\n\n".join(p for p in (control, speech, body_text) if p)
+                visual_guidance = polished["prompt"]
         else:
             job.touch(JobStatus.submitting, "Writing motion notes…")
             mot = await prompt_enhancer.motion_addendum(rewritten)
             job.meta["prompt_enhanced"] = mot["enhanced"]
             job.meta["prompt_enhance_reason"] = mot["reason"]
-            speech = dialogue_lock(prompt_body)
-            control = build_control_prefix(
-                duration=duration_str,
-                resolution=resolution,
-                aspect_ratio=aspect_ratio,
-                generate_audio=generate_audio,
-                no_subtitles=no_subtitles,
-                no_bgm=no_bgm,
-                spoken_lines=spoken,
-            )
-            lock = (
-                frame_lock_prefix(len(images))
-                if api_task == "image_to_video"
-                else reference_lock_prefix(len(images), len(videos))
-            )
-            final_prompt = "\n\n".join(
-                p for p in (control, lock, speech, rewritten, mot["prompt"]) if p
-            )
+            lock = (frame_lock_prefix(len(images)) if api_task == "image_to_video"
+                    else reference_lock_prefix(len(images), len(videos)))
+            visual_guidance = "\n\n".join(p for p in (lock, mot["prompt"]) if p)
+
+        final_prompt = compose_media_prompt(
+            rewritten, preferences=preferences, no_subtitles=no_subtitles,
+            visual_guidance=visual_guidance,
+        )
 
         job.meta["final_prompt_preview"] = final_prompt
 

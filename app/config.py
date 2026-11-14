@@ -60,7 +60,7 @@ class Settings(BaseSettings):
     # mostly waits on polling, so this only stops a runaway burst.
     max_active_jobs: int = 8
     max_workspace_jobs: int = 500
-    app_version: str = "0.3.0"
+    app_version: str = "0.3.1"
 
 
 settings = Settings()

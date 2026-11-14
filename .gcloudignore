@@ -1,0 +1,18 @@
+# Only application sources enter the Cloud Build upload.
+*
+!Dockerfile
+!requirements.txt
+!.dockerignore
+!app/
+!app/**
+!static/
+!static/**
+**/__pycache__/
+**/*.pyc
+**/.DS_Store
+**/.env*
+**/*credentials*.json
+**/*state*.json
+**/cookies*.json
+**/*.pem
+**/*.key

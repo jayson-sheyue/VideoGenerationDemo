@@ -6,6 +6,17 @@ Local / Cloud Run lab for **Gemini Omni Flash**. The default model is GA **Omni 
 
 Model limits and prompt patterns: [learning_guide.md](./learning_guide.md) (Chinese). The in-product **API guide** tab (also at `/docs`) lists every capability, the limits by model, and the official pages. This README covers how to run, deploy, and call this repo.
 
+### Sound preferences
+
+The studio includes **Human voice**, **Background music**, **Ambient sound / effects** (on by default), and **Captions** (off by default). These are prompt directions, not native Omni API switches. Explicit requests or prohibitions in the **original prompt always take priority**. For an unspecified element, a checked box asks the model to infer suitable content and style from the scene; an unchecked box asks it to omit that element. Supplied dialogue, language and music details are preserved. Prompt assistance is optional and cannot override this priority.
+
+Preferences are saved per draft and in task history, exports, and **Use these settings**. They apply to all four generation modes and only the new segment of extension. Editing cannot change dialogue; upscale accepts no text instructions. Model adherence is probabilistic; the app does not mute or replace audio after generation.
+
+`POST /api/generate` accepts `audio_preferences: {"speech": true, "music": true, "effects": true}` and `no_subtitles: true`. These app fields are translated into the final text prompt, visible in task details; they are not forwarded as unsupported Omni fields. Legacy `generate_audio` / `no_bgm` remain fallbacks when `audio_preferences` is absent. The hidden default ban on music and quote-only dialogue lock have been removed.
+
+Official reference: [Audio prompting](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/video/video-gen-prompt-guide).
+
+
 ## What it can do
 
 | UI mode | API `task` | Role |
@@ -90,7 +101,7 @@ Optional: `REGION`, `SERVICE`, `OMNI_MODEL`, `ALLOW_UNAUTHENTICATED=false`. The 
 ## Known limits
 
 - Slow generations—treat as async jobs.
-- No Veo-style `generate_audio` flag; dialogue is prompt-locked.
+- No Veo-style native `generate_audio` flag; app sound preferences guide the prompt, with explicit user instructions taking priority.
 - Voice / dialogue content cannot be edited; picture edits can.
 - Extend follows the official contract: **any-length** source; `response_format.duration` is the append length (3–10s). Live rejects `aspect_ratio` on extend — this demo does not send it. The demo does **not** pre-trim long sources.
 - Upscale rejects any text part.

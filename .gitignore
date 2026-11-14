@@ -11,4 +11,17 @@ credentials.json
 *.key
 service-account*.json
 .gcloud/
+.env*
+!.env.example
+*credentials*.json
+client_secret*.json
+*state*.json
+cookies*.json
+.adk/
+*.db
+*.p12
+*.jks
+*.keystore
+build/
+dist/
 

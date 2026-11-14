@@ -1,5 +1,19 @@
 /* UI language is independent from prompts and media content. English is default. */
 const COPY = {
+  audioOptions: ["Sound & captions", "音声・字幕", "声音与字幕"],
+  audioSpeech: ["Human voice", "人の声", "人声／对白"],
+  audioMusic: ["Background music", "BGM", "背景音乐（BGM）"],
+  audioEffects: ["Ambient sound / effects", "環境音・効果音", "环境音／音效"],
+  captions: ["Captions", "字幕", "字幕"],
+  audioOn: ["Checked", "オン", "已勾选"],
+  audioOff: ["Unchecked", "オフ", "未勾选"],
+  audioHelp: [
+    "Your original prompt takes priority, including explicit exclusions. Otherwise, checked items are inferred from the scene; unchecked items are omitted. Works with prompt assistance on or off. These are prompt-based directions, not guaranteed audio switches.",
+    "元のプロンプトの明示的な指示（禁止を含む）を優先します。指定がなければ、オンの項目は場面から推測し、オフの項目は省きます。プロンプト補助のオン・オフに関係なく適用されます。音声を保証する API スイッチではなく、プロンプトによる指示です。",
+    "原始提示词的明确要求（包括禁止）优先。未明确时，勾选项按场景风格推断生成，未勾选项不生成。无需开启提示词增强。这些选项通过提示词引导，模型不保证完全遵循。"
+  ],
+  audioExtendHelp: ["Applies to the appended segment only; existing source audio is unchanged.", "追加部分のみに適用します。元の部分の音声は変更しません。", "仅作用于续写的新片段，不修改原有片段的声音。"],
+  audioUnavailable: ["Sound preferences are available for generation and extension. Editing does not support changing dialogue; upscaling takes no text instructions.", "音声設定は生成・延長で利用できます。編集では台詞の変更はできません。アップスケールはテキスト指示を受け付けません。", "声音设置适用于生成和续写。编辑不支持修改对白，放大不接受文字指令。"],
   studio: ["Studio", "スタジオ", "创作台"],
   library: ["Portfolio", "作品集", "作品集"],
   tasks: ["Tasks", "タスク", "任务历史"],

@@ -177,6 +177,10 @@ function defaultDraft() {
     labels: "",
     stateful: true,
     enhance: false,
+    audioSpeech: true,
+    audioMusic: true,
+    audioEffects: true,
+    captions: false,
   };
 }
 function draft() {
@@ -321,6 +325,10 @@ function readForm() {
     labels: $("labels").value,
     stateful: $("stateful").checked,
     enhance: $("enhance").checked,
+    audioSpeech: $("audioSpeech").checked,
+    audioMusic: $("audioMusic").checked,
+    audioEffects: $("audioEffects").checked,
+    captions: $("captions").checked,
   });
   return d;
 }
@@ -455,6 +463,12 @@ function renderForm() {
   $("labels").value = d.labels;
   $("stateful").checked = d.stateful;
   $("enhance").checked = d.enhance;
+  for (const key of ["audioSpeech", "audioMusic", "audioEffects", "captions"])
+    $(key).checked = d[key];
+  const soundSupported = ["generate", "extend"].includes(c.mode);
+  $("audioOptions").hidden = !soundSupported;
+  $("audioUnavailable").hidden = soundSupported;
+  $("audioExtendHelp").hidden = c.mode !== "extend";
   $("seedField").hidden = !p.supports_seed;
   $("labelsField").hidden = !p.supports_labels;
   $("statefulField").hidden =
@@ -951,6 +965,14 @@ function settingsOf(job) {
   if (mode !== "extend" && (r.resolution || job.output_resolution))
     parts.push(r.resolution || job.output_resolution);
   if (mode === "generate" && r.aspect_ratio) parts.push(r.aspect_ratio);
+  if (["generate", "extend"].includes(mode)) {
+    const audio = r.audio_preferences || job.meta?.audio_preferences;
+    if (audio) {
+      for (const [key, label] of [["speech", "audioSpeech"], ["music", "audioMusic"], ["effects", "audioEffects"]])
+        parts.push(`${t(label)}: ${t(audio[key] ? "audioOn" : "audioOff")}`);
+      parts.push(`${t("captions")}: ${t(r.no_subtitles === false ? "audioOn" : "audioOff")}`);
+    }
+  }
   if (r.seed != null) parts.push("seed " + r.seed);
   for (const [k, v] of Object.entries(r.labels || {})) parts.push(`${k}=${v}`);
   return parts.join(" · ") || "—";
@@ -1190,6 +1212,10 @@ function restoreSettings(job) {
     sourceUri: req.source_video_uri || "",
     stateful: req.stateful !== false,
     enhance: req.enhance_prompt || false,
+    audioSpeech: (req.audio_preferences || job.meta?.audio_preferences)?.speech ?? ((req.generate_audio ?? job.meta?.generate_audio) !== false),
+    audioMusic: (req.audio_preferences || job.meta?.audio_preferences)?.music ?? ((req.generate_audio ?? job.meta?.generate_audio) !== false && (req.no_bgm ?? job.meta?.no_bgm) !== true),
+    audioEffects: (req.audio_preferences || job.meta?.audio_preferences)?.effects ?? ((req.generate_audio ?? job.meta?.generate_audio) !== false),
+    captions: (req.no_subtitles ?? job.meta?.no_subtitles) === false,
     images: (job.meta?.gcs_ref_items || []).map((x) => ({
       ...x,
       name: x.uri.split("/").at(-1),
@@ -1441,6 +1467,10 @@ async function submit() {
       labels,
       stateful: p.supports_multiturn && d.stateful,
       enhance_prompt: ["generate", "extend"].includes(c.mode) && d.enhance,
+      audio_preferences: ["generate", "extend"].includes(c.mode)
+        ? { speech: d.audioSpeech, music: d.audioMusic, effects: d.audioEffects }
+        : null,
+      no_subtitles: !d.captions,
       reference_images: [],
       reference_videos: [],
       source_job_id: c.mode === "generate" ? null : d.sourceId || null,
@@ -1739,6 +1769,10 @@ for (const id of [
   "labels",
   "stateful",
   "enhance",
+  "audioSpeech",
+  "audioMusic",
+  "audioEffects",
+  "captions",
 ])
   $(id).addEventListener("input", () => {
     saveDraft();

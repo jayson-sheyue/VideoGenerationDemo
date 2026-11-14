@@ -1,5 +1,18 @@
 # Local proxy + credentials config must never reach the image
 .env
+.env*
+*credentials*.json
+client_secret*.json
+*state*.json
+cookies*.json
+.adk/
+*.db
+*.pem
+*.key
+*.p12
+*.jks
+*.keystore
+tests/
 
 .venv/
 outputs/

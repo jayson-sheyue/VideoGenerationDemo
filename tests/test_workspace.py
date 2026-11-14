@@ -24,6 +24,25 @@ class RecordTests(unittest.TestCase):
 
 
 class WorkspaceApiTests(unittest.TestCase):
+    def test_audio_preferences_survive_submission_export_and_idempotency(self):
+        body = {'prompt': 'A musician at sunrise', 'request_id': 'audio-preferences-test',
+                'audio_preferences': {'speech': False, 'music': True, 'effects': False},
+                'no_subtitles': False}
+        with patch('app.main.run_generation_job', new_callable=AsyncMock) as run:
+            result = self.client.post('/api/generate', json=body)
+            self.assertEqual(result.status_code, 200)
+            task_id = result.json()['id']
+            detail = self.client.get('/api/jobs/' + task_id).json()
+            exported = self.client.get('/api/jobs/' + task_id + '/export').json()
+            self.assertEqual(detail['request']['audio_preferences'], body['audio_preferences'])
+            self.assertEqual(exported['request']['audio_preferences'], body['audio_preferences'])
+            self.assertFalse(detail['request']['no_subtitles'])
+            self.assertEqual(run.call_args.kwargs['audio_preferences'].model_dump(), body['audio_preferences'])
+            self.assertEqual(self.client.post('/api/generate', json=body).json()['id'], task_id)
+            changed = {**body, 'audio_preferences': {**body['audio_preferences'], 'speech': True}}
+            self.assertEqual(self.client.post('/api/generate', json=changed).status_code, 409)
+            run.assert_called_once()
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.repo = RecordStore(self.temp.name)

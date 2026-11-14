@@ -228,27 +228,6 @@ async def download_image_as_base64(url: str) -> tuple[str, str]:
     return base64.b64encode(data).decode("utf-8"), mime
 
 
-_DIALOGUE_PATTERNS = (
-    re.compile(r"[“\"「『]([^”\"」』\n]{2,})[”\"」』]"),
-    re.compile(r"(?:说|問|问|道|喊|答)\s*[:：]\s*([^\n]{2,})"),
-)
-
-
-def extract_spoken_lines(prompt: str) -> list[str]:
-    """Spoken lines the author wrote. URLs in quotes are ignored."""
-    found: list[str] = []
-    seen: set[str] = set()
-    for pattern in _DIALOGUE_PATTERNS:
-        for match in pattern.finditer(prompt):
-            line = match.group(1).strip().rstrip("。.!?！？")
-            if len(line) < 2 or "://" in line:
-                continue
-            if line not in seen:
-                seen.add(line)
-                found.append(line)
-    return found
-
-
 def _image_ref_tag(one_based: int) -> str:
     return f"<IMAGE_REF_{one_based - 1}>"
 
@@ -328,50 +307,6 @@ def reference_lock_prefix(image_count: int, video_count: int = 0) -> str:
         "props, locations, or plot that is not written there."
     )
     return "\n".join(lines)
-
-
-def dialogue_lock(prompt: str) -> str:
-    lines = extract_spoken_lines(prompt)
-    if not lines:
-        return (
-            "No dialogue. No speech, narration, or extra spoken lines. "
-            "Diegetic sound only."
-        )
-    listed = " / ".join(f"「{line}」" for line in lines)
-    return (
-        f"The only spoken dialogue allowed is: {listed}. "
-        "Do not add, translate, improvise, or extend any other lines."
-    )
-
-
-def build_control_prefix(
-    *,
-    duration: str,
-    resolution: str,
-    aspect_ratio: str,
-    generate_audio: bool,
-    no_subtitles: bool,
-    no_bgm: bool,
-    spoken_lines: list[str] | None = None,
-) -> str:
-    parts = [
-        f"{duration} video",
-        f"{resolution} resolution",
-        f"{aspect_ratio} aspect ratio",
-    ]
-    if not generate_audio:
-        audio = "Mute / no audio track if possible; silence preferred."
-    elif spoken_lines:
-        audio = "Diegetic audio. Speak only the dialogue locked below."
-    else:
-        audio = "Diegetic audio only. No speech."
-    extras = [audio]
-    if no_bgm:
-        extras.append("No background music.")
-    if no_subtitles:
-        extras.append("No burned-in subtitles or on-screen text captions.")
-    body = ", ".join(p for p in parts if p)
-    return f"{body}. {' '.join(extras)}"
 
 
 # Public stills used by every image example. Prompts below describe these

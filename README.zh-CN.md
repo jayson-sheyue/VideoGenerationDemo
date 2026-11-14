@@ -6,6 +6,17 @@
 
 模型能力、参数限制、提示词写法见 [learning_guide.md](./learning_guide.md)。页面里的 **API 能力指南**（也可直接打开 `/docs`）列出每项能力、各模型的参数范围和官方页面。本文只讲 **这个仓库怎么跑、怎么部署、接口怎么用**。
 
+### 声音偏好
+
+创作台提供 **人声／对白、背景音乐、环境音／音效**（默认勾选）和 **字幕**（默认不勾选）。这些是提示词引导，不是 Omni 原生音频开关。**原始提示词的明确要求或禁止始终优先**；未明确时，勾选项按原场景隐含风格推断生成，未勾选项不生成。明确提供的台词、语言及配乐细节保持原意，是否开启提示词增强不影响此规则。
+
+设置随各模式草稿、任务历史和导出保存，可通过「复用此任务设置」恢复。适用于四种生成模式，续写时只作用于新增片段；编辑不支持改对白，放大不接受文字指令。模型不保证完全遵循声音指令，应用不会在生成后强制静音或替换音轨。
+
+`POST /api/generate` 新增 `audio_preferences: {"speech": true, "music": true, "effects": true}`，字幕通过 `no_subtitles: true` 控制。这些应用字段会转换为最终提示词，可在任务详情查看，不会作为不受支持的原生字段传给 Omni。未提供 `audio_preferences` 时兼容旧 `generate_audio` / `no_bgm` 字段。已移除隐藏的默认禁配乐和仅识别引号台词的限制。
+
+官方依据：[音频提示指南](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/video/video-gen-prompt-guide)。
+
+
 ## 能做什么
 
 | 界面模式 | 实际 API `task` | 作用 |
@@ -203,7 +214,7 @@ app/omni_client.py       Interactions 请求、轮询、解析视频
 app/model_catalog.py     1.1 / 1.2 的时长、编辑、放大和参考上限
 app/jobs.py              异步任务、按模型校验时长、参考图/视频复用、任务记录持久化
 app/workspace.py         工作区身份与记录存储（GCS 对象 + generation 校验，或本地 JSON）
-app/prompt_utils.py      解析 URL、@图片N / @视频N、台词锁
+app/prompt_utils.py      解析 URL、@图片N / @视频N
 app/prompt_enhancer.py   动作补丁、续写润色、建议气泡
 app/gcs_util.py          上传、签名 URL、时长探测
 app/main.py              FastAPI
@@ -217,7 +228,7 @@ learning_guide.md        Omni 能力与提示词
 ## 已知限制（与本 Demo 相关）
 
 - 生成慢，请当异步任务用，不要把 HTTP 超时设太短。
-- 对白靠提示词约束；Omni **没有** Veo 那种独立的 `generate_audio` 字段。打开「Generate dialogue」类措辞容易多出旁白，本 Demo 会按分镜里的引号锁台词。
+- 对白靠提示词约束；Omni **没有** Veo 那种独立的 `generate_audio` 字段。声音勾选通过提示词引导，原始提示词的明确要求优先。
 - 当前 API **不支持改配音 / 改对白内容**（画面编辑可以）。
 - 续写按官方：**源片任意长度**；`response_format.duration` 为本次追加 3–10 秒。文档里的 `aspect_ratio` 线上会拒，本 Demo 不传。**不会**为规避错误而裁短源片。
 - 编辑过长视频会返回 `Editing duration N exceeds maximum duration …`。1.1 的上限是 10 秒，1.2 的模型卡片是 15 秒。
